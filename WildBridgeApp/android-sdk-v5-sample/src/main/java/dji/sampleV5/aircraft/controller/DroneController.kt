@@ -23,12 +23,14 @@ import dji.sampleV5.aircraft.utils.wpml.WaypointInfoModel
 import dji.v5.manager.aircraft.waypoint3.WaypointMissionManager
 import dji.v5.utils.common.ContextUtil
 import dji.sdk.wpmz.value.mission.*
+import dji.v5.et.set
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
+
 
 object DroneController {
 
@@ -201,46 +203,37 @@ object DroneController {
         isYawReached = false
         val controlLoopYaw = Handler(Looper.getMainLooper())
         val updateInterval = 100.0 // Update every 100 ms
-        val yawPID = PID(3.0, 0.0, 0.0, updateInterval/1000, -30.0 to 30.0)
+        val maxYawRate = 30.0 // degrees per second
+        val yawPID = PID(3.0, 0.0, 0.0, updateInterval/1000, -maxYawRate to maxYawRate)
 
-        // Enable virtual stick with function defined before
         virtualStickVM.enableVirtualStickAdvancedMode()
-        val flightControlParam = VirtualStickFlightControlParam().apply {
-            this.pitch = 0.0
-            this.roll = 0.0
-            this.verticalThrottle = 0.0
-            this.verticalControlMode = VerticalControlMode.POSITION
-            this.rollPitchControlMode = RollPitchControlMode.VELOCITY
-            this.yawControlMode = YawControlMode.ANGULAR_VELOCITY
-            this.rollPitchCoordinateSystem = FlightCoordinateSystem.BODY
-        }
 
         controlLoopYaw.post(object : Runnable {
             override fun run() {
-                // Normalize target yaw to [-180, 180] range
-                val adjustedDesiredYaw = normalizeAngle(targetYaw)
-
-                // Get the current yaw angle of the drone
+                val currentPosition = getLocation3D()
                 val currentYaw = getHeading()
-
-                // Compute yaw error and normalize within [-180, 180]
-                var yawError = adjustedDesiredYaw - currentYaw
-                yawError = normalizeAngle(yawError)
+                val yawError = normalizeAngle(targetYaw - currentYaw)
+                val angularVelocity = yawPID.update(yawError)
 
                 // Stop if the error is within a threshold
-                if (abs(yawError) < 0.5) { // Stop if close enough to the target yaw
+                if (abs(yawError) < 0.5) {
+                    setStick(0F, 0F, 0F, 0F)
                     isYawReached = true
                     return
                 }
 
-                // Calculate angular velocity using PID
-                val angularVelocity = yawPID.update(yawError)
+                val flightControlParam = VirtualStickFlightControlParam().apply {
+                    this.pitch = 0.0
+                    this.roll = 0.0
+                    this.yaw = angularVelocity
+                    this.verticalThrottle = currentPosition.altitude
+                    this.verticalControlMode = VerticalControlMode.POSITION
+                    this.rollPitchControlMode = RollPitchControlMode.VELOCITY
+                    this.yawControlMode = YawControlMode.ANGULAR_VELOCITY
+                    this.rollPitchCoordinateSystem = FlightCoordinateSystem.BODY
+                }
 
-                // Set yaw in the control parameters and send it
-                flightControlParam.yaw = angularVelocity
                 virtualStickVM.sendVirtualStickAdvancedParam(flightControlParam)
-
-                // Schedule the next update
                 controlLoopYaw.postDelayed(this, updateInterval.toLong())
             }
         })
@@ -386,10 +379,9 @@ object DroneController {
         })
     }
 
-    fun navigateToWaypointWithPID(targetLatitude: Double, targetLongitude: Double, targetAlt: Double, targetYaw: Double) {
+    fun navigateToWaypointWithPID(targetLatitude: Double, targetLongitude: Double, targetAlt: Double, targetYaw: Double, maxSpeed: Double) {
 
         val updateInterval = 100.0  // Update every 100 ms
-        val maxSpeed = 5.0 // meters per second
         val maxYawRate = 30.0 // degrees per second
 
         virtualStickVM.enableVirtualStickAdvancedMode()
@@ -468,10 +460,10 @@ object DroneController {
             val phi2 = Math.toRadians(latB)
             val deltaPhi = Math.toRadians(latB - latA)
             val deltaLambda = Math.toRadians(lonB - lonA)
-            val a = Math.sin(deltaPhi/2) * Math.sin(deltaPhi/2) +
-                    Math.cos(phi1) * Math.cos(phi2) *
-                    Math.sin(deltaLambda/2) * Math.sin(deltaLambda/2)
-            val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+            val a = sin(deltaPhi/2) * sin(deltaPhi/2) +
+                    cos(phi1) * cos(phi2) *
+                    sin(deltaLambda/2) * sin(deltaLambda/2)
+            val c = 2 * atan2(sqrt(a), sqrt(1 - a))
             return earthR * c
         }
 
@@ -480,10 +472,10 @@ object DroneController {
             val phi1 = Math.toRadians(lat1)
             val phi2 = Math.toRadians(lat2)
             val deltaLambda = Math.toRadians(lon2 - lon1)
-            val y = Math.sin(deltaLambda) * Math.cos(phi2)
-            val x = Math.cos(phi1) * Math.sin(phi2) -
-                    Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLambda)
-            val bearing = Math.toDegrees(Math.atan2(y, x))
+            val y = sin(deltaLambda) * cos(phi2)
+            val x = cos(phi1) * sin(phi2) -
+                    sin(phi1) * cos(phi2) * cos(deltaLambda)
+            val bearing = Math.toDegrees(atan2(y, x))
             return (bearing + 360) % 360
         }
 
@@ -563,13 +555,13 @@ object DroneController {
                         targetSpeed = minSpeedFinal + (cruiseSpeed - minSpeedFinal) * (distToEnd / slowdownRadius)
                 }
 
-                val pitch = targetSpeed * Math.cos(Math.toRadians(moveDirRel))
-                val roll = targetSpeed * Math.sin(Math.toRadians(moveDirRel))
+                val pitch = targetSpeed * cos(Math.toRadians(moveDirRel))
+                val roll = targetSpeed * sin(Math.toRadians(moveDirRel))
 
                 // Stop criteria: last segment, close to endpoint, and altitude close
                 val reached = isLastSegment &&
                         (calculateDistance(current.latitude, current.longitude, end.first, end.second) < 0.8) &&
-                        (Math.abs(targetAlt - current.altitude) < 1.0)
+                        (abs(targetAlt - current.altitude) < 1.0)
 
                 if (reached) {
                     setStick(0F, 0F, 0F, 0F)
@@ -704,7 +696,10 @@ object DroneController {
         return info
     }
 
-    private fun createTemplate(waypointInfoModels: List<WaypointInfoModel>): Template {
+    private fun createTemplate(
+        waypointInfoModels: List<WaypointInfoModel>,
+        trajectorySpeed: Double
+    ): Template {
         val t = Template()
         t.waypointInfo = createTemplateWaypointInfo(waypointInfoModels)
 
@@ -716,7 +711,7 @@ object DroneController {
         }
         t.coordinateParam = cp
         t.useGlobalTransitionalSpeed = true
-        t.autoFlightSpeed = 12.0
+        t.autoFlightSpeed = trajectorySpeed
         t.payloadParam = ArrayList()
         return t
     }
@@ -738,7 +733,10 @@ object DroneController {
         return result
     }
 
-    fun navigateTrajectoryNative(userWaypoints: List<Triple<Double, Double, Double>>) {
+    fun navigateTrajectoryNative(
+        userWaypoints: List<Triple<Double, Double, Double>>,
+        trajectorySpeed: Double
+    ) {
         if (userWaypoints.size < 2) {
             ToastUtils.showToast("Need at least 2 waypoints")
             return
@@ -764,7 +762,7 @@ object DroneController {
         // Build mission components
         val mission = createWaylineMission()
         val config = createMissionConfig()
-        val template = createTemplate(wpModels)
+        val template = createTemplate(wpModels, trajectorySpeed)
 
         // Generate KMZ
         val missionName = generateTrajectoryName()
@@ -839,5 +837,10 @@ object DroneController {
         return isIntermediaryWaypointReached
     }
 
+    private val goHomeHeightKey: DJIKey<Int> = FlightControllerKey.KeyGoHomeHeight.create()
 
+    fun setRTHAltitude(altitude: Int) {
+        goHomeHeightKey.set(altitude)
+        ToastUtils.showToast("RTH altitude set to $altitude m")
+    }
 }

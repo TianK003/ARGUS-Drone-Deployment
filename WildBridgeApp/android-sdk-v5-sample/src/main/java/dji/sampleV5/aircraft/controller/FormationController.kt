@@ -191,8 +191,8 @@ object FormationController {
     private fun updateFormation() {
         when (role) {
             DroneRole.LEADER -> updateAsLeader()
-            DroneRole.FOLLOWER -> updateAsFollower()
             DroneRole.NONE -> return
+            DroneRole.FOLLOWER -> TODO()
         }
     }
 
@@ -218,59 +218,6 @@ object FormationController {
                 ToastUtils.showToast("Follower too far away - breaking formation")
                 stopFormation()
             }
-        }
-    }
-
-    private fun updateAsFollower() {
-        leaderState?.let { leader ->
-            val currentState = getCurrentDroneState()
-
-            // Check connection timeout
-            if (System.currentTimeMillis() - leader.timestamp > CONNECTION_TIMEOUT) {
-                ToastUtils.showToast("Lost connection to leader")
-                stopFormation()
-                return
-            }
-
-            // Calculate target position based on formation config
-            val targetPosition = calculateFollowerTargetPosition(leader, config)
-
-            // Check safety constraints
-            val distance = DroneController.calculateDistance(
-                currentState.position.latitude, currentState.position.longitude,
-                leader.position.latitude, leader.position.longitude
-            )
-
-            if (distance > config.maxFormationDistance) {
-                ToastUtils.showToast("Too far from leader - breaking formation")
-                stopFormation()
-                return
-            }
-
-            // Collision avoidance check
-            if (checkCollisionRisk(currentState, leader)) {
-                collisionAvoidanceActive = true
-                executeCollisionAvoidance(currentState, leader)
-                return
-            } else {
-                collisionAvoidanceActive = false
-            }
-
-            // Navigate to target position
-            DroneController.navigateToWaypointWithPID(
-                targetPosition.latitude,
-                targetPosition.longitude,
-                targetPosition.altitude,
-                leader.heading
-            )
-
-            // Send follower state to leader
-            sendToLeader("follower_state", mapOf(
-                "position" to positionToMap(currentState.position),
-                "heading" to currentState.heading,
-                "battery" to currentState.battery,
-                "collision_avoidance" to collisionAvoidanceActive
-            ))
         }
     }
 
@@ -324,7 +271,6 @@ object FormationController {
         val avoidanceLat = follower.position.latitude + (2.0 * cos(Math.toRadians(awayHeading)) / 111320.0)
         val avoidanceLon = follower.position.longitude + (2.0 * sin(Math.toRadians(awayHeading)) / (111320.0 * cos(Math.toRadians(follower.position.latitude))))
 
-        DroneController.navigateToWaypointWithPID(avoidanceLat, avoidanceLon, avoidanceAltitude, awayHeading)
         ToastUtils.showToast("Collision avoidance active")
     }
 

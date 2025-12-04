@@ -1,5 +1,5 @@
 package dji.sampleV5.aircraft.pages
-import android.util.DisplayMetrics
+import android.annotation.SuppressLint
 import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
@@ -32,6 +32,7 @@ import dji.sdk.keyvalue.value.common.Velocity3D
 import dji.sdk.keyvalue.value.flightcontroller.VirtualStickFlightControlParam
 import dji.sdk.keyvalue.value.gimbal.GimbalAngleRotation
 import dji.sdk.keyvalue.value.gimbal.GimbalAngleRotationMode
+import dji.sdk.keyvalue.value.flightcontroller.LowBatteryRTHInfo
 import dji.v5.common.callback.CommonCallbacks
 import dji.v5.common.error.IDJIError
 import dji.v5.et.action
@@ -47,8 +48,10 @@ import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.util.Collections
-
+import dji.v5.ux.core.util.DataProcessor
+import dji.sdk.keyvalue.key.KeyTools
 import dji.sampleV5.aircraft.controller.DroneController
+import dji.sampleV5.aircraft.server.TelemetryServer
 
 // Import for custom HTTP server implementation
 import java.io.BufferedReader
@@ -58,6 +61,9 @@ import java.io.PrintWriter
 import java.net.Socket
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
+import dji.v5.manager.KeyManager
+
+import dji.sdk.keyvalue.value.flightcontroller.FlightMode
 
 /**
  * Class Description
@@ -87,6 +93,67 @@ class VirtualStickFragment : DJIFragment() {
 
     // Simple HTTP Server instance
     private var httpServer: SimpleHttpServer? = null
+    private var telemetryServer: TelemetryServer? = null
+    private var isHomePointSetLatch = false
+
+    // --- Remaining flight time style data (similar to RemainingFlightTimeWidgetModel) ---
+    private val chargeRemainingProcessor: DataProcessor<Int> = DataProcessor.create(0)
+    private val goHomeAssessmentProcessor: DataProcessor<LowBatteryRTHInfo> = DataProcessor.create(LowBatteryRTHInfo())
+    private val seriousLowBatteryThresholdProcessor: DataProcessor<Int> = DataProcessor.create(0)
+    private val lowBatteryThresholdProcessor: DataProcessor<Int> = DataProcessor.create(0)
+    private val timeNeededToLandProcessor: DataProcessor<Int> = DataProcessor.create(0)
+
+    private val chargeRemainingKey = KeyTools.createKey(BatteryKey.KeyChargeRemainingInPercent)
+    private val goHomeAssessmentKey = KeyTools.createKey(FlightControllerKey.KeyLowBatteryRTHInfo)
+    private val seriousLowBatteryKey = KeyTools.createKey(FlightControllerKey.KeySeriousLowBatteryWarningThreshold)
+    private val lowBatteryKey = KeyTools.createKey(FlightControllerKey.KeyLowBatteryWarningThreshold)
+    private val timeNeededToLandKey = KeyTools.createKey(FlightControllerKey.KeyLowBatteryRTHInfo)
+
+    private val flightModeKey: DJIKey<FlightMode> = FlightControllerKey.KeyFlightMode.create()
+    private fun getFlightMode(): FlightMode = flightModeKey.get(FlightMode.UNKNOWN)
+
+    data class RemainingFlightTimeData(
+        val remainingCharge: Int,
+        val batteryNeededToLand: Int,
+        val batteryNeededToGoHome: Int,
+        val seriousLowBatteryThreshold: Int,
+        val lowBatteryThreshold: Int,
+        val flightTime: Int
+    )
+
+    private fun getRemainingFlightTimeData(): RemainingFlightTimeData {
+        val goHomeInfo = goHomeAssessmentProcessor.value
+        return RemainingFlightTimeData(
+            chargeRemainingProcessor.value,
+            goHomeInfo.batteryPercentNeededToLand,
+            goHomeInfo.batteryPercentNeededToGoHome,
+            seriousLowBatteryThresholdProcessor.value,
+            lowBatteryThresholdProcessor.value,
+            goHomeInfo.remainingFlightTime
+        )
+    }
+
+    private fun setupBatteryKeyListeners() {
+        KeyManager.getInstance().listen(chargeRemainingKey, this) { _, newValue ->
+            chargeRemainingProcessor.onNext(newValue ?: 0)
+        }
+
+        KeyManager.getInstance().listen(goHomeAssessmentKey, this) { _, newValue ->
+            goHomeAssessmentProcessor.onNext(newValue ?: LowBatteryRTHInfo())
+        }
+
+        KeyManager.getInstance().listen(seriousLowBatteryKey, this) { _, newValue ->
+            seriousLowBatteryThresholdProcessor.onNext(newValue ?: 0)
+        }
+
+        KeyManager.getInstance().listen(lowBatteryKey, this) { _, newValue ->
+            lowBatteryThresholdProcessor.onNext(newValue ?: 0)
+        }
+
+        KeyManager.getInstance().listen(timeNeededToLandKey, this) { _, newValue ->
+            timeNeededToLandProcessor.onNext(newValue?.timeNeededToLand ?: 0)
+        }
+    }
 
     // Simple HTTP server implementation
     private inner class SimpleHttpServer(private val port: Int) {
@@ -188,7 +255,7 @@ class VirtualStickFragment : DJIFragment() {
         private fun handleHttpRequest(method: String, uri: String, postData: String): String {
             return when (method) {
                 "POST" -> handlePostRequest(uri, postData)
-                "GET" -> handleGetRequest(uri)
+                "GET" -> "GET requests are no longer supported. Use TCP socket on port 8081 for telemetry."
                 else -> "Method Not Allowed"
             }
         }
@@ -336,15 +403,16 @@ class VirtualStickFragment : DJIFragment() {
                     }
                     "/send/gotoWPwithPID" -> {
                         val cmd = postData.split(",")
-                        if (cmd.size < 4) {
-                            return "Invalid input. Expected format: lat,lon,alt,yaw"
+                        if (cmd.size < 5) {
+                            return "Invalid input. Expected format: lat,lon,alt,yaw,maxSpeed"
                         }
                         val latitude = cmd[0].toDouble()
                         val longitude = cmd[1].toDouble()
                         val altitude = cmd[2].toDouble()
                         val yaw = cmd[3].toDouble()
-                        DroneController.navigateToWaypointWithPID(latitude, longitude, altitude, yaw)
-                        "Waypoint command received: Latitude=$latitude, Longitude=$longitude, Altitude=$altitude, Yaw=$yaw"
+                        val maxSpeed = cmd[4].toDouble()
+                        DroneController.navigateToWaypointWithPID(latitude, longitude, altitude, yaw, maxSpeed)
+                        "Waypoint command received: Latitude=$latitude, Longitude=$longitude, Altitude=$altitude, Yaw=$yaw, MaxSpeed=$maxSpeed"
                     }
                     "/send/navigateTrajectory" -> {
                         Log.d("DroneServer", "Received trajectory data: $postData")
@@ -378,73 +446,53 @@ class VirtualStickFragment : DJIFragment() {
                     }
                     // --- New endpoints ---
                     "/send/navigateTrajectoryDJINative" -> {
-                        // Expect: "lat,lon,alt; lat,lon,alt; ..."
+                        // Expect: "speed;lat,lon,alt;lat,lon,alt;..."
                         val segments = postData.split(";").map { it.trim() }.filter { it.isNotEmpty() }
-                        if (segments.size < 2) return "Invalid input. Need at least 2 waypoints: lat,lon,alt;..."
+                        if (segments.size < 3) return "Invalid input. Need speed and at least 2 waypoints: speed;lat,lon,alt;..."
+
+                        val trajectorySpeed = segments[0].toDoubleOrNull()
+                            ?: return "Invalid input. Speed must be a number."
+
                         val waypoints = mutableListOf<Triple<Double, Double, Double>>()
-                        for ((i, s) in segments.withIndex()) {
+                        for (i in 1 until segments.size) {
+                            val s = segments[i]
                             val parts = s.split(",").map { it.trim() }
-                            if (parts.size < 3) return "Invalid input at segment ${i}: expected lat,lon,alt"
+                            if (parts.size < 3) return "Invalid input at segment ${i - 1}: expected lat,lon,alt"
                             val lat = parts[0].toDouble()
                             val lon = parts[1].toDouble()
                             val alt = parts[2].toDouble()
                             waypoints.add(Triple(lat, lon, alt))
                         }
-                        DroneController.navigateTrajectoryNative(waypoints)
-                        mainHandler.post { ToastUtils.showToast("DJI native mission started (${waypoints.size} wps)") }
-                        "DJI native mission requested with ${waypoints.size} waypoints"
+
+                        if (waypoints.size < 2) {
+                            return "Invalid input. Need at least 2 waypoints."
+                        }
+
+                        DroneController.navigateTrajectoryNative(waypoints, trajectorySpeed)
+                        mainHandler.post { ToastUtils.showToast("DJI native mission started (${waypoints.size} wps at ${trajectorySpeed}m/s)") }
+                        "DJI native mission requested with ${waypoints.size} waypoints at ${trajectorySpeed}m/s"
                     }
                     "/send/abort/DJIMission" -> {
                         DroneController.endMission()
                         mainHandler.post { ToastUtils.showToast("End mission requested") }
                         "Mission stop requested"
                     }
+                    "/send/setRTHAltitude" -> {
+                        val altitude = postData.toIntOrNull()
+                        if (altitude != null) {
+                            DroneController.setRTHAltitude(altitude)
+                            mainHandler.post {
+                                ToastUtils.showToast("Setting RTH altitude to $altitude m")
+                            }
+                            "RTH altitude set to $altitude m"
+                        } else {
+                            "Invalid altitude value"
+                        }
+                    }
                     else -> "Not Found"
                 }
             } catch (e: Exception) {
                 Log.e("DroneServer", "Error processing POST request: ${e.message}", e)
-                "Error processing request: ${e.message}"
-            }
-        }
-
-        private fun handleGetRequest(uri: String): String {
-            return try {
-                when (uri) {
-                    "/" -> "Hello!\nYou are connected to WildBridge."
-                    "/aircraft/allStates" -> {
-                        val speed = getSpeed().toString()
-                        val heading = getHeading().toString()
-                        val attitude = getAttitude().toString()
-                        val gimbalJointAttitude = getJointAttitude().toString()
-                        val gimbalAttitude = getGimbalAttitudeKey().toString()
-                        val location = getLocation3D().toString()
-                        val zoomFl = getCameraZoomFocalLength().toString()
-                        val hybridFl = getCameraHybridFocalLength().toString()
-                        val opticalFl = getCameraOpticalFocalLength().toString()
-                        val zoomRatio = zoomKey.get().toString()
-                        val batteryLevel = getBatteryLevel().toString()
-                        val satelliteCount = getSatelliteCount().toString()
-
-                        "{\"speed\":$speed,\"heading\":$heading,\"attitude\":$attitude,\"location\":$location," +
-                                "\"gimbalAttitude\":$gimbalAttitude,\"gimbalJointAttitude\":$gimbalJointAttitude," +
-                                "\"zoomFl\":$zoomFl,\"hybridFl\":$hybridFl,\"opticalFl\":$opticalFl," +
-                                "\"zoomRatio\":$zoomRatio,\"batteryLevel\":$batteryLevel,\"satelliteCount\":$satelliteCount}"
-                    }
-                    "/aircraft/speed" -> getSpeed().toString()
-                    "/home/location" -> getLocationHome().toString()
-                    "/aircraft/heading" -> getHeading().toString()
-                    "/aircraft/attitude" -> getAttitude().toString()
-                    "/aircraft/location" -> getLocation3D().toString()
-                    "/aircraft/gimbalAttitude" -> getGimbalAttitudeKey().toString()
-                    "/status/waypointReached" -> if (DroneController.isWaypointReached()) "true" else "false"
-                    "/status/intermediaryWaypointReached" -> if (DroneController.isIntermediaryWaypointReached()) "true" else "false"
-                    "/status/yawReached" -> if (DroneController.isYawReached()) "true" else "false"
-                    "/status/altitudeReached" -> if (DroneController.isAltitudeReached()) "true" else "false"
-                    "/status/camera/isRecording" -> isRecording.get().toString()
-                    else -> "Not Found"
-                }
-            } catch (e: Exception) {
-                Log.e("DroneServer", "Error processing GET request: ${e.message}", e)
                 "Error processing request: ${e.message}"
             }
         }
@@ -473,6 +521,24 @@ class VirtualStickFragment : DJIFragment() {
         // Add battery level TextView
         addBatteryLevelDisplay()
 
+        // Set up key listeners
+        setupBatteryKeyListeners()
+
+        // Add low battery RTH info TextViews
+        addLowBatteryRTHInfoDisplay()
+
+        // Update distance to home display
+        updateDistanceToHomeDisplay()
+
+        // Set up a periodic update for distance to home
+        val distanceUpdateRunnable = object : Runnable {
+            override fun run() {
+                updateDistanceToHomeDisplay()
+                mainHandler.postDelayed(this, 1000) // Update every second
+            }
+        }
+        mainHandler.post(distanceUpdateRunnable)
+
         initBtnClickListener()
         setupAndStartRtspStream()
         virtualStickVM.listenRCStick()
@@ -498,7 +564,7 @@ class VirtualStickFragment : DJIFragment() {
             binding?.streamQualityInfoTv?.text = it.toString()
         }
 
-        startServerIfNeeded()
+        startServers()
 
         // Initialize camera stream
         initCameraStream()
@@ -707,6 +773,9 @@ class VirtualStickFragment : DJIFragment() {
     private val batteryKey: DJIKey<Int> = BatteryKey.KeyChargeRemainingInPercent.create()
     private fun getBatteryLevel(): Int = batteryKey.get(-1)
 
+    private fun getTimeNeededToGoHome(): Int = goHomeAssessmentProcessor.value.timeNeededToGoHome
+    private fun getTimeNeededToLand(): Int = timeNeededToLandProcessor.value
+
     // Get device IP address
     private val deviceIp: String? by lazy {
         getDeviceIpAddress()
@@ -760,53 +829,79 @@ class VirtualStickFragment : DJIFragment() {
         ToastUtils.showToast("Device IP: $ipAddress")
     }
 
-    private fun startServerIfNeeded() {
+    private fun startServers() {
         if (!isPortInUse(8080)) {
             try {
                 httpServer = SimpleHttpServer(8080)
                 httpServer?.start()
-                Log.i("VirtualStickFragment", "NanoHTTPD server started on $deviceIp:8080")
+                Log.i("VirtualStickFragment", "HTTP server started on $deviceIp:8080")
             } catch (e: Exception) {
-                Log.e("VirtualStickFragment", "Error starting NanoHTTPD server: ${e.message}")
+                Log.e("VirtualStickFragment", "Error starting HTTP server: ${e.message}")
                 ToastUtils.showToast("Failed to start HTTP server: ${e.message}")
+            }
+        }
+        if (!isPortInUse(8081)) {
+            try {
+                telemetryServer = TelemetryServer(8081, ::getTelemetryJson)
+                telemetryServer?.start()
+                Log.i("VirtualStickFragment", "Telemetry server started on $deviceIp:8081")
+            } catch (e: Exception) {
+                Log.e("VirtualStickFragment", "Error starting telemetry server: ${e.message}")
+                ToastUtils.showToast("Failed to start telemetry server: ${e.message}")
             }
         }
     }
 
+    @SuppressLint("SetTextI18n")
     private fun addBatteryLevelDisplay() {
-        // Create a TextView programmatically
-
-        val displayMetrics = resources.displayMetrics
-        val screenWidth = displayMetrics.widthPixels
-        val leftPadding = screenWidth / 2
-
-        val batteryLevelTextView = TextView(requireContext()).apply {
-            id = View.generateViewId()
-            textSize = 16f
-            setTextColor(Color.WHITE)
-            setPadding(leftPadding, 16, 16, 16)
-        }
-
-        // Add the TextView to the fragment's view
-        binding?.root?.addView(batteryLevelTextView)
-
-        // Update the battery level initially
-        val batteryPercentage = getBatteryLevel()
-        batteryLevelTextView.text = "Battery Level: $batteryPercentage%"
-
         // Set up a periodic update for battery level
         val batteryUpdateRunnable = object : Runnable {
             override fun run() {
-                val currentBatteryLevel = batteryKey.get(-1)
+                val currentBatteryLevel = getBatteryLevel()
                 mainHandler.post {
-                    batteryLevelTextView.text = "Battery Level: $currentBatteryLevel%"
+                    binding?.batteryLevelTv?.text = "Battery Level: $currentBatteryLevel%"
                 }
-                mainHandler.postDelayed(this, 5000) // Update every 5 seconds
+                mainHandler.postDelayed(this, 1000) // Update every second
             }
         }
 
         // Start the periodic updates
         mainHandler.post(batteryUpdateRunnable)
+    }
+
+    private fun addLowBatteryRTHInfoDisplay() {
+        // Set up a periodic update for low battery RTH info
+        val lowBatteryRTHInfoUpdateRunnable = object : Runnable {
+            override fun run() {
+                updateLowBatteryRTHInfoDisplay()
+                mainHandler.postDelayed(this, 1000) // Update every second
+            }
+        }
+
+        // Start the periodic updates
+        mainHandler.post(lowBatteryRTHInfoUpdateRunnable)
+    }
+
+    @SuppressLint("SetTextI18n")
+    private fun updateLowBatteryRTHInfoDisplay() {
+        val rftData = getRemainingFlightTimeData()
+        mainHandler.post {
+            binding?.remainingFlightTimeTv?.text =
+                "Remaining Flight Time: ${rftData.flightTime} sec"
+            binding?.timeNeededToGoHomeTv?.text =
+                "Time Needed to Land: ${getTimeNeededToGoHome() + getTimeNeededToLand()} sec"
+        }
+    }
+
+    @SuppressLint("SetTextI18n", "DefaultLocale")
+    private fun updateDistanceToHomeDisplay() {
+        val current = getLocation3D()
+        val home = getLocationHome()
+        val distance = DroneController.calculateDistance(current.latitude, current.longitude, home.latitude, home.longitude)
+
+        mainHandler.post {
+            binding?.distanceToHomeTv?.text = "Distance to Home: ${String.format("%.2f", distance)} m"
+        }
     }
 
     private fun initCameraStream() {
@@ -861,6 +956,83 @@ class VirtualStickFragment : DJIFragment() {
         super.onDestroyView()
         stopRtspStream()
         httpServer?.stop()
+        telemetryServer?.stop()
         stopCameraStream()
+        KeyManager.getInstance().cancelListen(this)
     }
+
+    private fun isHomeSet(): Boolean {
+        if (isHomePointSetLatch) {
+            return true
+        }
+
+        val isFlyingKey: DJIKey<Boolean> = FlightControllerKey.KeyIsFlying.create()
+        val isFlying = isFlyingKey.get(false)
+
+        if (!isFlying) {
+            val home = getLocationHome()
+            if (home.latitude != 0.0 && home.longitude != 0.0) {
+                val current = getLocation3D()
+                val distance = DroneController.calculateDistance(current.latitude, current.longitude, home.latitude, home.longitude)
+                if (distance < 0.5) {
+                    isHomePointSetLatch = true
+                    return true
+                }
+            }
+        }
+        return isHomePointSetLatch
+    }
+
+    //region --- Telemetry JSON ---
+    private fun getTelemetryJson(): String {
+        val rftData = getRemainingFlightTimeData()
+        val timeNeededToGoHome = getTimeNeededToGoHome().toString()
+        val timeNeededToLand = getTimeNeededToLand().toString()
+        val totalTime = (getTimeNeededToGoHome() + getTimeNeededToLand()).toString()
+        val maxRadiusCanFlyAndGoHome = goHomeAssessmentProcessor.value.maxRadiusCanFlyAndGoHome.toString()
+        val speed = getSpeed().toString()
+        val heading = getHeading().toString()
+        val attitude = getAttitude().toString()
+        val gimbalJointAttitude = getJointAttitude().toString()
+        val gimbalAttitude = getGimbalAttitudeKey().toString()
+        val location = getLocation3D().toString()
+        val zoomFl = getCameraZoomFocalLength().toString()
+        val hybridFl = getCameraHybridFocalLength().toString()
+        val opticalFl = getCameraOpticalFocalLength().toString()
+        val zoomRatio = zoomKey.get().toString()
+        val batteryLevel = getBatteryLevel().toString()
+        val satelliteCount = getSatelliteCount().toString()
+        val homeLocation = getLocationHome().toString()
+        val distanceToHome = DroneController.calculateDistance(getLocation3D().latitude, getLocation3D().longitude, getLocationHome().latitude, getLocationHome().longitude).toString()
+        val waypointReached = DroneController.isWaypointReached()
+        val intermediaryWaypointReached = DroneController.isIntermediaryWaypointReached()
+        val yawReached = DroneController.isYawReached()
+        val altitudeReached = DroneController.isAltitudeReached()
+        val isRecording = isRecording.get().toString()
+        val homeSet = isHomeSet().toString()
+        val flightMode = "\"${getFlightMode().name}\""
+
+        // Extract values from rftData
+        val remainingCharge = rftData.remainingCharge.toString()
+        val batteryNeededToLand = rftData.batteryNeededToLand.toString()
+        val batteryNeededToGoHome = rftData.batteryNeededToGoHome.toString()
+        val seriousLowBatteryThreshold = rftData.seriousLowBatteryThreshold.toString()
+        val lowBatteryThreshold = rftData.lowBatteryThreshold.toString()
+        val remainingFlightTime = rftData.flightTime.toString()
+
+        return "{\"speed\":$speed,\"heading\":$heading,\"attitude\":$attitude,\"location\":$location," +
+                "\"gimbalAttitude\":$gimbalAttitude,\"gimbalJointAttitude\":$gimbalJointAttitude," +
+                "\"zoomFl\":$zoomFl,\"hybridFl\":$hybridFl,\"opticalFl\":$opticalFl," +
+                "\"zoomRatio\":$zoomRatio,\"batteryLevel\":$batteryLevel,\"satelliteCount\":$satelliteCount," +
+                "\"homeLocation\":$homeLocation,\"distanceToHome\":$distanceToHome," +
+                "\"waypointReached\":$waypointReached,\"intermediaryWaypointReached\":$intermediaryWaypointReached," +
+                "\"yawReached\":$yawReached,\"altitudeReached\":$altitudeReached,\"isRecording\":$isRecording," +
+                "\"homeSet\":$homeSet,\"remainingFlightTime\":$remainingFlightTime," +
+                "\"timeNeededToGoHome\":$timeNeededToGoHome,\"timeNeededToLand\":$timeNeededToLand," +
+                "\"totalTime\":$totalTime,\"maxRadiusCanFlyAndGoHome\":$maxRadiusCanFlyAndGoHome," +
+                "\"remainingCharge\":$remainingCharge,\"batteryNeededToLand\":$batteryNeededToLand," +
+                "\"batteryNeededToGoHome\":$batteryNeededToGoHome,\"seriousLowBatteryThreshold\":$seriousLowBatteryThreshold," +
+                "\"lowBatteryThreshold\":$lowBatteryThreshold,\"flightMode\":$flightMode}"
+    }
+    //endregion
 }

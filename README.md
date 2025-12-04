@@ -34,12 +34,15 @@ This work is part of the WildDrone project, funded by the European Union's Horiz
 
 ### Key Features
 
-- **Real-time Telemetry**: HTTP-based access to flight data, sensor readings, and drone status
+- **Real-time Telemetry**: TCP socket streaming (port 8081) for continuous flight data at 20Hz
+- **HTTP Command Interface**: RESTful API (port 8080) for drone control commands
 - **Live Video Streaming**: RTSP video feed compatible with OpenCV, FFmpeg, and VLC
+- **DJI Native Waypoint Missions**: Support for KMZ-based wayline missions via DJI's native system
+- **PID-based Navigation**: Custom trajectory following with pure pursuit algorithm
 - **Multi-drone Coordination**: Support for up to 10 concurrent drones with sub-100ms latency
 - **Wildlife Monitoring**: Integrated YOLO-based object detection and geolocation
 - **Scientific Applications**: Proven in conservation, wildfire detection, and atmospheric research
-- **Cross-platform Integration**: Compatible with Python, ROS 2, and standard HTTP clients
+- **Cross-platform Integration**: Compatible with Python, ROS 2, and standard TCP/HTTP clients
 
 ## Supported Hardware
 
@@ -149,18 +152,29 @@ Refer to the code snippets in the Quick Start section for examples of sending co
 
 #### 2. Ground Station Connection
 
-**Telemetry Access** (Python):
+**Telemetry Access via TCP Socket** (Python):
 ```python
-import requests
+import socket
+import json
 
 rc_ip = "192.168.1.100"  # Your RC IP
-response = requests.get(f"http://{rc_ip}:8080/aircraft/allStates")
-print(response.json())
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.connect((rc_ip, 8081))
+
+buffer = ""
+while True:
+    data = sock.recv(4096).decode('utf-8')
+    buffer += data
+    while '\n' in buffer:
+        line, buffer = buffer.split('\n', 1)
+        if line.strip():
+            telemetry = json.loads(line)
+            print(f"Battery: {telemetry['batteryLevel']}%")
+            print(f"Location: {telemetry['location']}")
 ```
 
 **Video Streaming** (OpenCV):
 ```python
-import requests
 import cv2
 
 rc_ip = "192.168.1.100"  # Your RC IP
@@ -169,7 +183,7 @@ cap = cv2.VideoCapture(rtsp_url)
 ret, frame = cap.read()
 ```
 
-**Control Commands**:
+**Control Commands** (HTTP POST):
 ```python
 import requests
 
@@ -177,25 +191,43 @@ rc_ip = "192.168.1.100"  # Your RC IP
 # Takeoff
 requests.post(f"http://{rc_ip}:8080/send/takeoff")
 
-# Navigate to waypoint
-data = "49.306254,4.593728,20"  # lat,lon,alt
-requests.post(f"http://{rc_ip}:8080/send/gotoWP", data=data)
+# Navigate to waypoint with PID control
+data = "49.306254,4.593728,20,90"  # lat,lon,alt,yaw
+requests.post(f"http://{rc_ip}:8080/send/gotoWPwithPID", data=data)
+
+# DJI Native waypoint mission
+waypoints = "49.306,4.593,20; 49.307,4.594,25; 49.308,4.595,20"
+requests.post(f"http://{rc_ip}:8080/send/navigateTrajectoryDJINative", data=waypoints)
 ```
 
 ## API Reference
 
-### Telemetry Endpoints (HTTP GET)
+### Telemetry Stream (TCP Socket - Port 8081)
 
-| Endpoint | Description |
-|----------|-------------|
-| `/aircraft/location` | GPS coordinates and altitude |
-| `/aircraft/attitude` | Pitch, roll, yaw values |
-| `/aircraft/speed` | Current velocity |
-| `/aircraft/heading` | Current heading |
-| `/aircraft/allStates` | Complete telemetry package |
-| `/aircraft/battery` | Battery level and status |
+Connect to the TCP socket on port 8081 to receive continuous JSON telemetry at 20Hz.
 
-### Control Endpoints (HTTP POST)
+**Telemetry Fields:**
+| Field | Description |
+|-------|-------------|
+| `speed` | Aircraft velocity (x, y, z) |
+| `heading` | Compass heading in degrees |
+| `attitude` | Pitch, roll, yaw values |
+| `location` | GPS coordinates and altitude |
+| `gimbalAttitude` | Gimbal orientation |
+| `batteryLevel` | Battery percentage |
+| `satelliteCount` | GPS satellite count |
+| `homeLocation` | Home point coordinates |
+| `distanceToHome` | Distance to home in meters |
+| `waypointReached` | Waypoint status flag |
+| `isRecording` | Camera recording status |
+| `flightMode` | Current flight mode (GPS, MANUAL, GO_HOME, etc.) |
+| `remainingFlightTime` | Estimated flight time remaining |
+| `batteryNeededToGoHome` | Battery % needed for RTH |
+| `batteryNeededToLand` | Battery % needed to land |
+| `timeNeededToGoHome` | Time to return home (seconds) |
+| `maxRadiusCanFlyAndGoHome` | Max flyable radius (meters) |
+
+### Control Endpoints (HTTP POST - Port 8080)
 
 | Endpoint | Description | Parameters |
 |----------|-------------|------------|
@@ -203,10 +235,45 @@ requests.post(f"http://{rc_ip}:8080/send/gotoWP", data=data)
 | `/send/land` | Initiate landing | None |
 | `/send/RTH` | Return to home | None |
 | `/send/gotoWP` | Navigate to waypoint | `lat,lon,alt` |
+| `/send/gotoWPwithPID` | Navigate with PID control | `lat,lon,alt,yaw` |
 | `/send/gotoYaw` | Rotate to heading | `yaw_angle` |
-| `/send/stick` | Virtual stick input | `pitch,roll,yaw,throttle` |
+| `/send/gotoAltitude` | Change altitude | `altitude` |
+| `/send/navigateTrajectory` | Follow trajectory (Virtual Stick) | `lat,lon,alt;...;lat,lon,alt,yaw` |
+| `/send/navigateTrajectoryDJINative` | DJI native waypoint mission | `lat,lon,alt;lat,lon,alt;...` |
+| `/send/abort/DJIMission` | Stop DJI native mission | None |
+| `/send/abortMission` | Stop and disable Virtual Stick | None |
+| `/send/enableVirtualStick` | Enable Virtual Stick mode | None |
+| `/send/stick` | Virtual stick input | `leftX,leftY,rightX,rightY` |
 | `/send/camera/zoom` | Camera zoom control | `zoom_ratio` |
-| `/send/gimbal/pitch` | Gimbal pitch control | `pitch_angle` |
+| `/send/camera/startRecording` | Start video recording | None |
+| `/send/camera/stopRecording` | Stop video recording | None |
+| `/send/gimbal/pitch` | Gimbal pitch control | `roll,pitch,yaw` |
+| `/send/gimbal/yaw` | Gimbal yaw control | `roll,pitch,yaw` |
+
+### Status Endpoints (HTTP GET - Port 8080)
+
+| Endpoint | Description |
+|----------|-------------|
+| `/status/waypointReached` | Check if waypoint reached |
+| `/status/intermediaryWaypointReached` | Check intermediary waypoint |
+| `/status/yawReached` | Check if target yaw reached |
+| `/status/altitudeReached` | Check if target altitude reached |
+| `/status/camera/isRecording` | Check recording status |
+
+### Legacy Telemetry Endpoints (HTTP GET - Port 8080)
+
+These endpoints are available for backward compatibility. For continuous telemetry, use the TCP socket on port 8081.
+
+| Endpoint | Description |
+|----------|-------------|
+| `/` | Connection test |
+| `/aircraft/allStates` | Complete telemetry package (JSON) |
+| `/aircraft/speed` | Aircraft velocity |
+| `/aircraft/heading` | Compass heading |
+| `/aircraft/attitude` | Pitch, roll, yaw |
+| `/aircraft/location` | GPS coordinates and altitude |
+| `/aircraft/gimbalAttitude` | Gimbal orientation |
+| `/home/location` | Home point coordinates |
 
 ### Video Streaming
 - **RTSP URL**: `rtsp://aaa:aaa@{RC_IP}:8554/streaming/live/1`
@@ -313,7 +380,9 @@ WildBridge has been validated in multiple research domains:
 
 **Connection Problems**:
 - Verify RC IP address in network settings
-- Ensure WildBridge app is running and Virtual Stick enabled
+- Ensure WildBridge app is running (Virtual Stick page open)
+- For telemetry: connect to TCP port 8081
+- For commands: use HTTP POST to port 8080
 
 **Video Stream Issues**:
 - Test RTSP URL in VLC: `rtsp://aaa:aaa@{RC_IP}:8554/streaming/live/1` (Open Network Protocol, Ctrl+N)
@@ -331,8 +400,14 @@ ping {RC_IP}
 # Test video stream
 vlc rtsp://aaa:aaa@{RC_IP}:8554/streaming/live/1
 
-# Monitor telemetry
-curl http://{RC_IP}:8080/aircraft/allStates
+# Monitor telemetry (TCP stream)
+nc {RC_IP} 8081
+
+# Check waypoint status
+curl http://{RC_IP}:8080/status/waypointReached
+
+# Send takeoff command
+curl -X POST http://{RC_IP}:8080/send/takeoff
 ```
 
 ## License
