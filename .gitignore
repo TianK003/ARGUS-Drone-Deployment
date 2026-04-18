@@ -34,6 +34,15 @@ google-services.json
 
 # Python
 *.pyc
+__pycache__/
+.venv/
+venv/
+*.egg-info/
+
+# Web backend test artifacts
+/GroundStation/WebServer/first_frame.png
+/GroundStation/WebServer/*.mjpg
+/GroundStation/WebServer/*.jpg
 
 # Misc
 *.pt
