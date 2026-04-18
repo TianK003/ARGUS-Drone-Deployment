@@ -200,6 +200,111 @@ waypoints = "49.306,4.593,20; 49.307,4.594,25; 49.308,4.595,20"
 requests.post(f"http://{rc_ip}:8080/send/navigateTrajectoryDJINative", data=waypoints)
 ```
 
+## Web Ground Station (browser UI)
+
+`GroundStation/WebServer/` is a FastAPI backend + vanilla-JS frontend that lets an operator fly the drone from any browser on the LAN. Two tabs:
+
+- **Control** — on-screen joysticks (yaw/throttle + roll/pitch), **Takeoff / Land / RTH / Enable Virtual Stick / hard-stop** buttons, live activity log. Inputs are streamed to the backend over a WebSocket at up to 20 Hz and forwarded to the RC's `/send/stick`. A 500 ms deadman sends a zeroed stick command if the socket goes silent or the browser closes mid-drag.
+- **Video** — live feed from the drone. The backend opens the RC's RTSP stream with OpenCV, re-encodes frames to JPEG, and serves them as a `multipart/x-mixed-replace` MJPEG stream. The browser renders it in a plain `<img>` — no special plugins, works in any modern browser. A standalone `/video` page is available for popping the feed onto a second monitor.
+
+### Architecture
+
+```
+browser ──HTTP + WebSocket──► FastAPI :8000 ──HTTP  :8080──► RC / phone ──► drone
+                                            ──RTSP :8554──► RC / phone
+```
+
+Nothing in the DJI RC app needs to change — the webapp only uses the public HTTP/RTSP endpoints already exposed by WildBridge.
+
+### Requirements
+
+- The phone or RC Pro is already running the WildBridge app with the **Testing Tools → Virtual Stick** page foregrounded (this is what starts the :8080 / :8081 / :8554 servers).
+- Your laptop is on the same LAN and can `ping` / `curl` the phone's IP.
+- Python **3.9+** on the laptop.
+
+### Install
+
+```bash
+cd GroundStation/WebServer
+python -m venv .venv
+# macOS / Linux:
+source .venv/bin/activate
+# Windows (PowerShell):
+.\.venv\Scripts\Activate.ps1
+
+pip install -r requirements.txt
+```
+
+Dependencies (pulled by `requirements.txt`):
+- `fastapi`, `uvicorn[standard]` — web server + WebSocket
+- `requests` — HTTP client to the RC
+- `opencv-python-headless`, `numpy` — RTSP decoding + JPEG re-encoding for the video tab
+
+### Run
+
+```bash
+# Dev mode — no drone needed. Mock drone logs commands; mock video renders a test pattern.
+python -m app --mock
+
+# Live mode — talk to a real RC/phone. Use the phone's (or RC Pro's) LAN IP.
+python -m app --rc-ip 192.168.1.137
+
+# Recommended for a first real flight: cap stick inputs tighter than the default 0.3.
+python -m app --rc-ip 192.168.1.137 --max-stick 0.15
+
+# Skip the video broadcaster if another process is already consuming the RTSP feed.
+python -m app --rc-ip 192.168.1.137 --no-video
+
+# Expose on the LAN instead of localhost-only (lets a phone / tablet also open the UI).
+python -m app --rc-ip 192.168.1.137 --host 0.0.0.0
+```
+
+Then open **<http://localhost:8000>** in a browser.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--rc-ip IP` | — | RC/phone IP on the LAN. Required unless `--mock`. |
+| `--mock` | off | Log commands to stdout instead of sending; generate a test-pattern video. |
+| `--host HOST` | `127.0.0.1` | Bind address. Use `0.0.0.0` to expose on the LAN. |
+| `--port PORT` | `8000` | Web-server port. |
+| `--max-stick F` | `0.3` | Saturation cap in `[0, 1]` applied to every stick axis before forwarding. |
+| `--no-video` | off | Disable the RTSP broadcaster; `/api/video.*` endpoints return 503. |
+
+### Endpoints exposed by the web backend
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/` | Control + Video tabs (main UI) |
+| GET | `/video` | Standalone full-viewport video page (for popping out to a second monitor) |
+| GET | `/docs` | Interactive OpenAPI docs (FastAPI default) |
+| GET | `/api/health` | `{mode, rc_ip, max_stick, recent_calls}` |
+| POST | `/api/virtual-stick/enable` | Proxies RC `/send/enableVirtualStick` |
+| POST | `/api/virtual-stick/disable` | Proxies RC `/send/abortMission` (hard-stop) |
+| POST | `/api/stick` | Body `{leftX, leftY, rightX, rightY}` → RC `/send/stick` |
+| POST | `/api/takeoff` / `/api/land` / `/api/rth` | Proxy the matching RC command |
+| WS | `/ws/stick` | Stream stick values; backend debounces, rate-limits, deadman |
+| GET | `/api/video/status` | `{connected, fps, width, height, last_frame_age_s, mode}` |
+| GET | `/api/video/snapshot.jpg` | Single most-recent JPEG frame |
+| GET | `/api/video.mjpg` | `multipart/x-mixed-replace` MJPEG stream |
+
+### RTSP smoke test (without the webapp)
+
+`GroundStation/WebServer/tools/check_video.py` verifies the video path end-to-end — opens RTSP, prints reported resolution/FPS, measures actual received FPS, and saves the first decoded frame to `first_frame.png`:
+
+```bash
+pip install opencv-python   # if not already installed in the venv
+python tools/check_video.py 192.168.1.137
+```
+
+### Safety and operational notes
+
+- **Always click "Enable Virtual Stick" first.** The RC ignores `/send/stick` until virtual-stick mode is active.
+- **The DISABLE / HARD STOP button** triggers `/send/abortMission` — it's the in-UI kill switch.
+- **Deadman:** if the WebSocket closes or falls silent for 500 ms while sticks are non-zero, the backend automatically forwards a zeroed stick command.
+- **The physical RC always overrides the webapp** — grab the physical sticks or the RTH button on the RC if anything feels wrong.
+- **No auth.** The RC's own HTTP server has no auth either — run on a trusted LAN only.
+- **Don't let the phone app background** while flying. Ports 8080 / 8081 / 8554 only exist while the Virtual Stick page is foregrounded. Disable battery-save for the app and keep the screen awake.
+
 ## API Reference
 
 ### Telemetry Stream (TCP Socket - Port 8081)
