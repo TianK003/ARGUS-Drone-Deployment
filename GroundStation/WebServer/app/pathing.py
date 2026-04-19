@@ -98,7 +98,7 @@ def build_exclusive_grid(drones_local: List[DroneLocal], spacing: int) -> Grid:
         x_max = max(x_max, d.x + d.r)
         y_max = max(y_max, d.y + d.r)
 
-    cell = max(20.0, float(spacing * 0.75))
+    cell = max(10.0, float(spacing * 0.75))
     x_min -= cell
     y_min -= cell
     x_max += cell

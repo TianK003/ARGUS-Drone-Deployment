@@ -54,7 +54,7 @@ def generate_square_patrol_path(home: LocationModel, test_mode: bool) -> tuple[l
         # 50m radius default
         d_lat = 0.00045 
         d_lng = 0.00065
-        alt = 200.0
+        alt = 30.0
         
     waypoints = [
         {"lat": lat + d_lat, "lon": lng + d_lng, "alt": alt},
@@ -116,16 +116,16 @@ def broadcast_swarm_paths(app_state: Any):
             "id": d["id"],
             "lat": path_lat,
             "lng": path_lng,
-            "reach": 800
+            "reach": 50
         })
         
-    result = compute_paths(pathing_input, stripe_spacing=40, sweep_dir='ew')
+    result = compute_paths(pathing_input, stripe_spacing=10, sweep_dir='ew')
     paths = result["paths"]
     
     for drone_id, waypoints in paths.items():
         if drone_id in swarm_sockets:
             # Inject fixed altitude
-            fmt_waypoints = [{"lat": pt[0], "lon": pt[1], "alt": 200.0} for pt in waypoints]
+            fmt_waypoints = [{"lat": pt[0], "lon": pt[1], "alt": 30.0} for pt in waypoints]
             if not fmt_waypoints:
                 continue # Sometimes drone gets blocked out from grid, skip assigning.
                 
@@ -134,7 +134,7 @@ def broadcast_swarm_paths(app_state: Any):
             asyncio.create_task(swarm_sockets[drone_id].send_json({
                 "action": "path_update",
                 "waypoints": fmt_waypoints,
-                "targetAltitude": 200.0
+                "targetAltitude": 30.0
             }))
 
 @router.websocket("/ws/swarm/{uuid}")

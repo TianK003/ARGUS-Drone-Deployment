@@ -606,8 +606,8 @@
     <span style="font-weight:600;" id="place-id">—</span>
     <span class="coords" id="place-coords">—</span>
   </div>
-  <div class="row"><span>Coverage radius</span><span><span id="place-reach-val">800</span> m</span></div>
-  <input type="range" id="place-reach" min="100" max="10000" step="50" value="800">
+  <div class="row"><span>Coverage radius</span><span><span id="place-reach-val">50</span> m</span></div>
+  <input type="range" id="place-reach" min="10" max="1000" step="10" value="50">
   <div class="actions">
     <button id="place-cancel">Cancel</button>
     <button id="place-confirm" class="primary">Register drone</button>
@@ -650,7 +650,7 @@ function addLiveDrone(s, lat, lng) {
   const color = PALETTE[idx % PALETTE.length];
   const marker = L.circleMarker([lat, lng], { radius: 8, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 }).addTo(map);
   marker.bindTooltip(s.label || s.id, { permanent: true, direction: 'top', offset: [0, -6], className: 'drone-label' });
-  const entry = { marker, sourceId: s.id, label: s.label || s.id, online: !!s.online, color, lat, lng, reach: s.reach_m || 800 };
+  const entry = { marker, sourceId: s.id, label: s.label || s.id, online: !!s.online, color, lat, lng, reach: s.reach_m || 50 };
   liveByBackendId.set(s.id, entry);
   return entry;
 }
