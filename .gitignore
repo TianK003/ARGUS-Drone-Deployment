@@ -39,6 +39,11 @@ __pycache__/
 venv/
 *.egg-info/
 
+# Secrets — never commit API keys or other credentials
+.env
+*.env
+!.env.example
+
 # Web backend test artifacts
 /GroundStation/WebServer/first_frame.png
 /GroundStation/WebServer/*.mjpg
