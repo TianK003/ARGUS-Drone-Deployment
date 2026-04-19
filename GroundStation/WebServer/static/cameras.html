@@ -5,12 +5,12 @@
 <title>ARGUS — Camera Wall</title>
 <style>
   :root {
-    --bg:     #0e1116;
-    --panel:  #161b22;
-    --border: #2a313a;
-    --text:   #e6edf3;
-    --muted:  #8b949e;
-    --accent: #3fb950;
+    --bg:     #141a2e;
+    --panel:  #1a2238;
+    --border: #2d3d5a;
+    --text:   #dde4f0;
+    --muted:  #8fa8c8;
+    --accent: #3b82f6;
     --danger: #f85149;
   }
   * { box-sizing: border-box; }
@@ -25,7 +25,9 @@
   }
   .topbar a { color: var(--muted); text-decoration: none; font-size: 12px; }
   .topbar a:hover { color: var(--text); }
-  .topbar h1 { margin: 0; font-size: 12px; letter-spacing: 2px; text-transform: uppercase; }
+  .brand-row { display: flex; align-items: center; gap: 8px; }
+  .brand-logo { height: 44px; width: auto; }
+  .brand-name { font-size: 14px; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; color: var(--text); }
   .topbar .count { margin-left: auto; color: var(--muted); font-size: 11px; }
 
   /* ── Grid wrapper ── */
@@ -89,7 +91,10 @@
 
 <div class="topbar">
   <a href="/">← Dashboard</a>
-  <h1>Camera Wall</h1>
+  <div class="brand-row">
+    <img src="/static/argus_icon.png" class="brand-logo" alt="ARGUS">
+    <span class="brand-name">ARGUS</span>
+  </div>
   <span class="count" id="count">—</span>
 </div>
 
