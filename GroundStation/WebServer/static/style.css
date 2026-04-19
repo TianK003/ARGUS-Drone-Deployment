@@ -194,26 +194,38 @@ html, body {
 
 .btn-icon { display: inline-block; margin-right: 8px; font-size: 13px; }
 
-/* ── Joysticks ──────────────────────────────────────────────────── */
-.sticks {
+/* ── RC-style deck: [stick][video][stick] ───────────────────────── */
+.rc-deck {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
+    grid-template-columns: minmax(220px, 260px) minmax(0, 1fr) minmax(220px, 260px);
+    gap: 18px;
     margin-bottom: 20px;
+    align-items: stretch;
     transition: opacity 0.15s ease;
 }
 
-.sticks.is-disabled { opacity: 0.3; pointer-events: none; }
+.rc-deck.is-disabled { opacity: 0.3; pointer-events: none; }
+
+.rc-video {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;          /* let flex children shrink below their intrinsic size */
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+}
 
 .stick-wrap {
     background: var(--bg-1);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 22px;
+    padding: 18px;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 14px;
+    justify-content: center;
+    gap: 12px;
 }
 
 .stick {
@@ -297,23 +309,25 @@ html, body {
     font-family: var(--mono);
 }
 
-/* ── Video tab ──────────────────────────────────────────────────── */
-.video-bar {
+/* ── Inline video (centre of RC deck) ───────────────────────────── */
+.rc-video .video-bar {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 12px;
-    gap: 12px;
+    gap: 10px;
     flex-wrap: wrap;
+    padding: 8px 12px;
+    background: var(--bg-2);
+    border-bottom: 1px solid var(--border);
 }
 
 .video-meta {
     font-family: var(--mono);
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-secondary);
     letter-spacing: 0.04em;
-    padding: 6px 12px;
-    background: var(--bg-2);
+    padding: 4px 10px;
+    background: var(--bg-1);
     border: 1px solid var(--border);
     border-radius: 999px;
 }
@@ -325,8 +339,9 @@ html, body {
 .video-frame {
     position: relative;
     background: #000;
-    border: 1px solid var(--border);
-    border-radius: 10px;
+    flex: 1 1 auto;
+    border: none;
+    border-radius: 0;
     overflow: hidden;
     aspect-ratio: 16 / 9;
     display: flex;
@@ -372,10 +387,95 @@ html, body {
     border-color: rgba(62, 180, 255, 0.4);
     color: var(--accent);
 }
+.status-pill[data-state="connected"] {
+    background: rgba(74, 222, 128, 0.10);
+    border-color: rgba(74, 222, 128, 0.45);
+    color: var(--success);
+}
+.status-pill[data-state="on"] {
+    background: rgba(245, 158, 11, 0.10);
+    border-color: rgba(245, 158, 11, 0.45);
+    color: var(--warn);
+}
 
+/* ── Gamepad bar ─────────────────────────────────────────────────── */
+.gamepad-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px 20px;
+    padding: 10px 14px;
+    margin: 10px 0 6px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-soft);
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+.gamepad-bar .toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+}
+.gamepad-bar .toggle input {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--accent);
+}
+.gamepad-bar .sensitivity {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+.gamepad-bar .sensitivity input[type="range"] {
+    width: 120px;
+    accent-color: var(--accent);
+}
+.gamepad-bar .sensitivity strong {
+    font-family: var(--mono);
+    color: var(--accent);
+    min-width: 36px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+.gamepad-bar .gimbal-readout {
+    margin-left: auto;
+    font-family: var(--mono);
+    color: var(--text-primary);
+    font-size: 12px;
+}
+.gamepad-bar .gimbal-readout .muted { color: var(--text-muted); margin-left: 8px; font-family: system-ui, sans-serif; }
+.gamepad-bar .gimbal-readout strong { color: var(--accent); font-variant-numeric: tabular-nums; display: inline-block; min-width: 40px; text-align: right; }
+.sim-indicator {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 1px 6px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--warn);
+    border: 1px solid rgba(245, 158, 11, 0.45);
+    border-radius: 3px;
+}
+
+
+@media (max-width: 960px) {
+    .rc-deck {
+        grid-template-columns: 1fr 1fr;
+    }
+    .rc-video {
+        grid-column: 1 / -1;
+        order: -1;  /* show the video above the sticks on narrow screens */
+    }
+}
 
 @media (max-width: 640px) {
-    .sticks { grid-template-columns: 1fr; }
+    .rc-deck { grid-template-columns: 1fr; }
+    .rc-video { grid-column: auto; order: -1; }
     .topbar { padding: 12px 16px; }
     .panel { padding: 16px; }
     .btn--danger { padding: 14px 24px; font-size: 14px; }

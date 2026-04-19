@@ -18,83 +18,98 @@
             <span class="status-pill" id="ws-pill" data-state="disconnected">WS: —</span>
             <span class="status-pill" id="vs-pill" data-state="off">Virtual Stick: OFF</span>
             <span class="status-pill" id="video-pill" data-state="disconnected">VIDEO: —</span>
+            <span class="status-pill" id="pad-pill" data-state="disconnected">PAD: —</span>
+            <span class="status-pill" id="sim-pill" data-state="off">SIM: OFF</span>
         </div>
     </header>
 
-    <nav class="tabs" role="tablist">
-        <button class="tab is-active" role="tab" data-tab="control">Control</button>
-        <button class="tab" role="tab" data-tab="video">Video</button>
-    </nav>
-
     <main class="panel">
-        <!-- ── Control tab ───────────────────────────────────────── -->
-        <section class="tab-panel is-active" data-panel="control">
-            <div id="banner" class="banner banner--warn">
-                Virtual Stick is <strong>OFF</strong>. The drone ignores joystick input until you press <strong>Enable Virtual Stick</strong>.
-            </div>
+        <div id="banner" class="banner banner--warn">
+            Virtual Stick is <strong>OFF</strong>. The drone ignores joystick input until you press <strong>Enable Virtual Stick</strong>.
+        </div>
 
-            <div class="button-row">
-                <button id="btn-enable" class="btn btn--primary">Enable Virtual Stick</button>
-                <button id="btn-takeoff" class="btn">Takeoff</button>
-                <button id="btn-land" class="btn">Land</button>
-                <button id="btn-rth" class="btn">Return to Home</button>
-            </div>
+        <div class="button-row">
+            <button id="btn-enable" class="btn btn--primary">Enable Virtual Stick</button>
+            <button id="btn-takeoff" class="btn">Takeoff</button>
+            <button id="btn-land" class="btn">Land</button>
+            <button id="btn-rth" class="btn">Return to Home</button>
+        </div>
 
-            <div class="sticks" id="sticks">
-                <div class="stick-wrap">
-                    <canvas id="left-stick" class="stick" width="280" height="280"></canvas>
-                    <div class="stick-label">
-                        <div class="stick-title">Left stick</div>
-                        <div class="stick-axes">
-                            <span>X → <strong>yaw</strong></span>
-                            <span>Y → <strong>throttle</strong></span>
-                        </div>
+        <div class="gamepad-bar">
+            <label class="toggle">
+                <input type="checkbox" id="toggle-pad">
+                <span>Use gamepad (Xbox / PlayStation)</span>
+            </label>
+            <label class="toggle">
+                <input type="checkbox" id="toggle-sim" checked>
+                <span>Sim mode — joysticks only, no commands sent</span>
+            </label>
+            <label class="sensitivity">
+                <span>Stick sensitivity</span>
+                <input type="range" id="pad-sensitivity" min="10" max="100" step="5" value="50">
+                <strong id="pad-sensitivity-val">50%</strong>
+            </label>
+            <div class="gimbal-readout">
+                Gimbal pitch <strong id="gimbal-val">0°</strong>
+                <span class="muted">(LT down · RT up)</span>
+            </div>
+        </div>
+
+        <!-- ── RC-style three-column deck: stick · video · stick ── -->
+        <div class="rc-deck" id="sticks">
+            <div class="stick-wrap">
+                <canvas id="left-stick" class="stick" width="200" height="200"></canvas>
+                <div class="stick-label">
+                    <div class="stick-title">Left stick</div>
+                    <div class="stick-axes">
+                        <span>X → <strong>yaw</strong></span>
+                        <span>Y → <strong>throttle</strong></span>
                     </div>
                 </div>
-                <div class="stick-wrap">
-                    <canvas id="right-stick" class="stick" width="280" height="280"></canvas>
-                    <div class="stick-label">
-                        <div class="stick-title">Right stick</div>
-                        <div class="stick-axes">
-                            <span>X → <strong>roll</strong></span>
-                            <span>Y → <strong>pitch</strong></span>
-                        </div>
+            </div>
+
+            <div class="rc-video">
+                <div class="video-bar">
+                    <div class="video-meta" id="video-meta">connecting…</div>
+                    <div class="video-actions">
+                        <a class="btn btn--small" id="link-video-new-tab" href="/video" target="_blank" rel="noopener">Open in new tab ↗</a>
+                        <button id="btn-video-reload" class="btn btn--small">Reload</button>
+                    </div>
+                </div>
+                <div class="video-frame">
+                    <img id="video-img" alt="drone live feed">
+                    <div class="video-placeholder" id="video-placeholder">
+                        <div class="spinner"></div>
+                        <div>Waiting for first frame…</div>
+                        <div class="video-hint">If this hangs, confirm the WildBridge app's <em>Virtual Stick</em> page is foregrounded on the phone.</div>
                     </div>
                 </div>
             </div>
 
-            <div class="stop-row">
-                <button id="btn-disable" class="btn btn--danger">
-                    <span class="btn-icon">■</span>DISABLE · HARD STOP
-                </button>
+            <div class="stick-wrap">
+                <canvas id="right-stick" class="stick" width="200" height="200"></canvas>
+                <div class="stick-label">
+                    <div class="stick-title">Right stick</div>
+                    <div class="stick-axes">
+                        <span>X → <strong>roll</strong></span>
+                        <span>Y → <strong>pitch</strong></span>
+                    </div>
+                </div>
             </div>
+        </div>
 
-            <section class="log-panel">
-                <div class="log-header">
-                    <span>Activity</span>
-                    <button id="btn-clear-log" class="btn btn--small">Clear</button>
-                </div>
-                <ol id="log" class="log"></ol>
-            </section>
-        </section>
+        <div class="stop-row">
+            <button id="btn-disable" class="btn btn--danger">
+                <span class="btn-icon">■</span>DISABLE · HARD STOP
+            </button>
+        </div>
 
-        <!-- ── Video tab ─────────────────────────────────────────── -->
-        <section class="tab-panel" data-panel="video">
-            <div class="video-bar">
-                <div class="video-meta" id="video-meta">connecting…</div>
-                <div class="video-actions">
-                    <a class="btn btn--small" id="link-video-new-tab" href="/video" target="_blank" rel="noopener">Open in new tab ↗</a>
-                    <button id="btn-video-reload" class="btn btn--small">Reload stream</button>
-                </div>
+        <section class="log-panel">
+            <div class="log-header">
+                <span>Activity</span>
+                <button id="btn-clear-log" class="btn btn--small">Clear</button>
             </div>
-            <div class="video-frame">
-                <img id="video-img" alt="drone live feed">
-                <div class="video-placeholder" id="video-placeholder">
-                    <div class="spinner"></div>
-                    <div>Waiting for first frame…</div>
-                    <div class="video-hint">If this hangs, confirm the WildBridge app's <em>Virtual Stick</em> page is foregrounded on the phone.</div>
-                </div>
-            </div>
+            <ol id="log" class="log"></ol>
         </section>
 
         <footer class="footnote">

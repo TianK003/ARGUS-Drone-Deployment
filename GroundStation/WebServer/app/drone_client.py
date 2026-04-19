@@ -32,6 +32,7 @@ from djiInterface import (  # noqa: E402
     DJIInterface,
     EP_ABORT_MISSION,
     EP_ENABLE_VIRTUAL_STICK,
+    EP_GIMBAL_SET_PITCH,
     EP_LAND,
     EP_RTH,
     EP_STICK,
@@ -60,7 +61,7 @@ class LiveDroneClient:
 
     mode = "live"
 
-    def __init__(self, rc_ip: str, max_stick: float = 0.3):
+    def __init__(self, rc_ip: str, max_stick: float = 0.1):
         self.rc_ip = rc_ip
         self.max_stick = max_stick
         self._dji = DJIInterface(rc_ip)
@@ -91,6 +92,10 @@ class LiveDroneClient:
     def rth(self) -> str:
         return self._record("rth", "", self._dji.requestSend(EP_RTH, ""))
 
+    def set_gimbal_pitch(self, pitch_deg: float) -> str:
+        body = f"0,{pitch_deg:.2f},0"
+        return self._record("gimbal", body, self._dji.requestSend(EP_GIMBAL_SET_PITCH, body))
+
 
 class MockDroneClient:
     """No-op drone client for local development. Logs every call to stdout."""
@@ -98,7 +103,7 @@ class MockDroneClient:
     mode = "mock"
     rc_ip = "mock"
 
-    def __init__(self, max_stick: float = 0.3):
+    def __init__(self, max_stick: float = 0.1):
         self.max_stick = max_stick
         self.last_calls: Deque[LogEntry] = deque(maxlen=100)
 
@@ -129,3 +134,6 @@ class MockDroneClient:
 
     def rth(self) -> str:
         return self._record("rth")
+
+    def set_gimbal_pitch(self, pitch_deg: float) -> str:
+        return self._record("gimbal", f"pitch={pitch_deg:+.1f}°")

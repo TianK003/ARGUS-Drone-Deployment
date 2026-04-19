@@ -150,7 +150,7 @@ def add_drone(payload: DroneCreate, request: Request):
         home_lng=payload.home_lng,
         reach_m=payload.reach_m if payload.reach_m is not None else 800,
         mock=payload.mock or bool(defaults.get("mock")),
-        max_stick=float(defaults.get("max_stick", 0.3)),
+        max_stick=float(defaults.get("max_stick", 0.1)),
         enable_video=payload.enable_video and not bool(defaults.get("no_video")),
     )
     try:
@@ -231,6 +231,17 @@ async def land(drone_id: str, request: Request):
 async def rth(drone_id: str, request: Request):
     entry = _entry(request, drone_id)
     return {"response": await asyncio.to_thread(entry.client.rth)}
+
+
+class GimbalPitchCommand(BaseModel):
+    pitch: float = Field(..., ge=-90.0, le=30.0)  # DJI gimbal joint range
+
+
+@router.post("/api/drones/{drone_id}/gimbal/pitch")
+async def gimbal_pitch(drone_id: str, cmd: GimbalPitchCommand, request: Request):
+    entry = _entry(request, drone_id)
+    resp = await asyncio.to_thread(entry.client.set_gimbal_pitch, cmd.pitch)
+    return {"response": resp}
 
 
 # ── Per-drone stick WebSocket ────────────────────────────────────────

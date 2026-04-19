@@ -34,7 +34,7 @@ class DroneEntry:
     home_lng: Optional[float] = None
     reach_m: int = 800
     mock: bool = False
-    max_stick: float = 0.3
+    max_stick: float = 0.1
     enable_video: bool = True
     client: object = field(default=None, init=False, repr=False)
     video: object = field(default=None, init=False, repr=False)
@@ -167,7 +167,7 @@ class DroneRegistry:
                     home_lng=raw.get("home_lng"),
                     reach_m=int(raw.get("reach_m") or 800),
                     mock=bool(raw.get("mock", defaults.get("mock", False))),
-                    max_stick=float(raw.get("max_stick") or defaults.get("max_stick", 0.3)),
+                    max_stick=float(raw.get("max_stick") or defaults.get("max_stick", 0.1)),
                     enable_video=bool(raw.get("enable_video", defaults.get("enable_video", True))),
                 )
             except (KeyError, TypeError, ValueError) as exc:

@@ -37,8 +37,8 @@ def parse_args(argv=None):
     p.add_argument("--host", default="127.0.0.1",
                    help="Bind address (default: 127.0.0.1). 0.0.0.0 to expose on LAN.")
     p.add_argument("--port", type=int, default=8000, help="Port (default: 8000).")
-    p.add_argument("--max-stick", type=float, default=0.3,
-                   help="Saturation cap in [0, 1] for stick axes (default: 0.3).")
+    p.add_argument("--max-stick", type=float, default=0.1,
+                   help="Saturation cap in [0, 1] for stick axes (default: 0.1 — controllers hit this at full deflection).")
     p.add_argument("--no-video", action="store_true",
                    help="Disable video broadcasters for all drones (skips RTSP).")
     return p.parse_args(argv)

@@ -117,6 +117,8 @@
     }
 
     function sendSticks() {
+        // Sim mode: update the on-screen joysticks only, no commands sent.
+        if (window.__argusSim) return;
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
         ws.send(JSON.stringify({
             leftX: leftJoy.x,
@@ -166,6 +168,18 @@
             c.addEventListener('pointerup', end);
             c.addEventListener('pointercancel', end);
             c.addEventListener('lostpointercapture', end);
+        }
+
+        setProgrammatic(x, y) {
+            // External input (e.g. gamepad). Skip if the user is touching the widget.
+            if (this.active) return;
+            const nx = Math.max(-1, Math.min(1, x));
+            const ny = Math.max(-1, Math.min(1, y));
+            if (nx === this.x && ny === this.y) return;
+            this.x = nx;
+            this.y = ny;
+            this.onChange();
+            this.draw();
         }
 
         _update(e) {
@@ -272,22 +286,7 @@
         linkNewTab.href = `/video?drone=${encodeURIComponent(DRONE_ID)}`;
     }
 
-    // ── Tab switching ───────────────────────────────────────────────
-    const tabs = document.querySelectorAll('.tab');
-    const panels = document.querySelectorAll('.tab-panel');
-    let videoStarted = false;
-
-    function activateTab(name) {
-        tabs.forEach(t => t.classList.toggle('is-active', t.dataset.tab === name));
-        panels.forEach(p => p.classList.toggle('is-active', p.dataset.panel === name));
-        if (name === 'video' && !videoStarted) {
-            startVideo();
-            videoStarted = true;
-        }
-    }
-    tabs.forEach(t => t.addEventListener('click', () => activateTab(t.dataset.tab)));
-
-    // ── Video tab logic ─────────────────────────────────────────────
+    // ── Inline video (always-on; video now sits between the sticks) ─
     const videoImg = document.getElementById('video-img');
     const videoPlaceholder = document.getElementById('video-placeholder');
     const videoMeta = document.getElementById('video-meta');
@@ -304,6 +303,7 @@
         });
         videoImg.src = API('/video.mjpg') + '?t=' + Date.now();
     }
+    startVideo();
 
     document.getElementById('btn-video-reload').addEventListener('click', () => {
         videoImg.classList.remove('is-loaded');
@@ -338,4 +338,187 @@
     }
     pollVideoStatus();
     setInterval(pollVideoStatus, 1500);
+
+    // ── Gamepad + SIM mode ──────────────────────────────────────────
+    const padPill = document.getElementById('pad-pill');
+    const simPill = document.getElementById('sim-pill');
+    const togglePad = document.getElementById('toggle-pad');
+    const toggleSim = document.getElementById('toggle-sim');
+    const gimbalValEl = document.getElementById('gimbal-val');
+    const sensSlider = document.getElementById('pad-sensitivity');
+    const sensValEl = document.getElementById('pad-sensitivity-val');
+
+    // Dead-zone for stick drift on Xbox/PS pads.
+    const DEADZONE = 0.12;
+    // Expo curve power — >1 makes small deflections extra gentle while still
+    // letting full deflection reach 1.0. 2.0 = quadratic (noticeably softer).
+    const EXPO_POWER = 2.0;
+
+    // Sensitivity multiplier from the slider (0.10 – 1.00). Default 0.50.
+    let sensitivity = sensSlider ? (parseInt(sensSlider.value, 10) / 100) : 0.5;
+    function applySensitivity() {
+        sensitivity = parseInt(sensSlider.value, 10) / 100;
+        sensValEl.textContent = Math.round(sensitivity * 100) + '%';
+    }
+    if (sensSlider) {
+        sensSlider.addEventListener('input', applySensitivity);
+        applySensitivity();
+    }
+    // LT/RT trigger threshold to count as "held".
+    const TRIGGER_THRESH = 0.08;
+    // Gimbal pitch range matches backend validation: [-90°, +30°].
+    const GIMBAL_MIN = -90;
+    const GIMBAL_MAX = 30;
+    // Send gimbal updates to the backend at most this often.
+    const GIMBAL_SEND_INTERVAL_MS = 150;
+
+    // SIM toggle default: ON — safer for first-time controller testing.
+    window.__argusSim = toggleSim.checked;
+    function syncSimPill() {
+        simPill.textContent = 'SIM: ' + (window.__argusSim ? 'ON' : 'OFF');
+        simPill.dataset.state = window.__argusSim ? 'on' : 'off';
+    }
+    syncSimPill();
+    toggleSim.addEventListener('change', () => {
+        window.__argusSim = toggleSim.checked;
+        syncSimPill();
+        log('sim', window.__argusSim ? 'on — commands are NOT sent to the drone' : 'off — live control');
+    });
+
+    function applyDeadzone(v) {
+        if (Math.abs(v) < DEADZONE) return 0;
+        // Re-scale so output ramps from 0 → 1 past the deadzone.
+        const sign = v < 0 ? -1 : 1;
+        return sign * (Math.abs(v) - DEADZONE) / (1 - DEADZONE);
+    }
+
+    // Combined shaping for gamepad sticks: deadzone → expo curve → sensitivity
+    // scale. Output magnitude is bounded by `sensitivity` (≤ 1.0).
+    function shapeStick(raw) {
+        const dz = applyDeadzone(raw);
+        if (dz === 0) return 0;
+        const sign = dz < 0 ? -1 : 1;
+        const curved = Math.pow(Math.abs(dz), EXPO_POWER);
+        return sign * curved * sensitivity;
+    }
+
+    let lastGimbalSentAt = 0;
+    let lastGimbalSentValue = null;
+    let rafHandle = null;
+    let lastActivePad = null;
+
+    window.addEventListener('gamepadconnected', (e) => {
+        lastActivePad = e.gamepad.index;
+        if (togglePad.checked) setPadPill('connected', e.gamepad.id);
+        log('gamepad', 'connected: ' + e.gamepad.id);
+    });
+    window.addEventListener('gamepaddisconnected', (e) => {
+        if (lastActivePad === e.gamepad.index) lastActivePad = null;
+        setPadPill('disconnected', '');
+        log('gamepad', 'disconnected: ' + e.gamepad.id);
+    });
+
+    function setPadPill(state, detail) {
+        if (state === 'connected') {
+            padPill.textContent = 'PAD: ' + (detail ? detail.slice(0, 14) : 'OK');
+        } else if (state === 'off') {
+            padPill.textContent = 'PAD: OFF';
+        } else {
+            padPill.textContent = 'PAD: —';
+        }
+        padPill.dataset.state = state;
+    }
+
+    function pickGamepad() {
+        const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+        if (!pads) return null;
+        if (lastActivePad != null && pads[lastActivePad]) return pads[lastActivePad];
+        for (const p of pads) if (p) return p;
+        return null;
+    }
+
+    async function sendGimbal(pitch) {
+        if (window.__argusSim) return;
+        try {
+            const res = await fetch(API('/gimbal/pitch'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pitch }),
+            });
+            if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+        } catch (e) {
+            log('gimbal', 'send failed: ' + e.message, true);
+        }
+    }
+
+    function tick() {
+        rafHandle = null;
+        const now = performance.now();
+
+        if (!togglePad.checked) return;  // loop stopped
+
+        const pad = pickGamepad();
+        if (!pad) {
+            setPadPill('disconnected', '');
+            scheduleTick();
+            return;
+        }
+        if (padPill.dataset.state !== 'connected') setPadPill('connected', pad.id);
+
+        // Stick mapping. Xbox layout:
+        //   axes[0] = LSB X (yaw)     axes[1] = LSB Y (throttle; up = -1)
+        //   axes[2] = RSB X (roll)    axes[3] = RSB Y (pitch;    up = -1)
+        // Stick values are softened with an expo curve and scaled by the
+        // user's Sensitivity slider; triggers (gimbal) are left untouched.
+        const lX = shapeStick(pad.axes[0] || 0);
+        const lY = -shapeStick(pad.axes[1] || 0);   // invert so up = +
+        const rX = shapeStick(pad.axes[2] || 0);
+        const rY = -shapeStick(pad.axes[3] || 0);
+
+        leftJoy.setProgrammatic(lX, lY);
+        rightJoy.setProgrammatic(rX, rY);
+
+        // Triggers: buttons[6] = LT, buttons[7] = RT. Analog on Xbox pads.
+        // Direct mapping (hold = tilt, release = return to 0):
+        //   RT at 0..1  → pitch 0..GIMBAL_MAX (tilt up)
+        //   LT at 0..1  → pitch 0..GIMBAL_MIN (tilt down)
+        // Nothing held → target = 0° so the gimbal re-centres.
+        const lt = (pad.buttons[6] && pad.buttons[6].value) || 0;
+        const rt = (pad.buttons[7] && pad.buttons[7].value) || 0;
+        const ltMag = lt > TRIGGER_THRESH ? lt : 0;
+        const rtMag = rt > TRIGGER_THRESH ? rt : 0;
+
+        let targetPitch = rtMag * GIMBAL_MAX + ltMag * GIMBAL_MIN;
+        if (targetPitch > GIMBAL_MAX) targetPitch = GIMBAL_MAX;
+        if (targetPitch < GIMBAL_MIN) targetPitch = GIMBAL_MIN;
+        gimbalValEl.textContent = targetPitch.toFixed(0) + '°';
+
+        const rounded = Math.round(targetPitch * 10) / 10;
+        if (now - lastGimbalSentAt > GIMBAL_SEND_INTERVAL_MS && rounded !== lastGimbalSentValue) {
+            lastGimbalSentAt = now;
+            lastGimbalSentValue = rounded;
+            sendGimbal(rounded);
+        }
+
+        scheduleTick();
+    }
+
+    function scheduleTick() {
+        if (rafHandle == null) rafHandle = requestAnimationFrame(tick);
+    }
+
+    togglePad.addEventListener('change', () => {
+        if (togglePad.checked) {
+            setPadPill('disconnected', '');  // will flip to connected on next tick if pad found
+            scheduleTick();
+            log('gamepad', 'enabled — press any button on the pad if not detected');
+        } else {
+            setPadPill('off', '');
+            // Release the sticks so the deadman zeros out the drone.
+            leftJoy.setProgrammatic(0, 0);
+            rightJoy.setProgrammatic(0, 0);
+            log('gamepad', 'disabled');
+        }
+    });
+    setPadPill('off', '');
 })();
