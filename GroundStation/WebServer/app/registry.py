@@ -18,6 +18,19 @@ class DroneRegistry:
     def __init__(self):
         self._lock = threading.RLock()
         self._drones: Dict[str, dict] = {}
+        self._alerts: List[dict] = []
+
+    def push_alert(self, alert: dict):
+        with self._lock:
+            self._alerts.append(alert)
+
+    def pop_alerts(self) -> List[dict]:
+        with self._lock:
+            if not self._alerts:
+                return []
+            res = self._alerts[:]
+            self._alerts.clear()
+            return res
 
     def add_or_update(self, drone_id: str, data: dict) -> dict:
         with self._lock:

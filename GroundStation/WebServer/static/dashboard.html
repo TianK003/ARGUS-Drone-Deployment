@@ -2,430 +2,550 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>ARGUS Swarm Dashboard</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=Outfit:wght@500;700&display=swap" rel="stylesheet">
+<title>ARGUS Hub</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
   :root {
-    --bg-base: #0B0E14;
-    --panel-bg: rgba(18, 22, 31, 0.85);
-    --panel-border: rgba(45, 55, 72, 0.6);
-    --text-primary: #F7FAFC;
-    --text-muted: #A0AEC0;
-    --accent: #00E676;
-    --danger: #FF1744;
-    --blur: blur(12px);
-    --font-heading: 'Outfit', sans-serif;
-    --font-body: 'Inter', sans-serif;
+    --bg:       #0d1117;
+    --panel:    #161b27;
+    --panel-2:  #1e2538;
+    --panel-3:  #242d45;
+    --border:   #263047;
+    --border-s: rgba(38,48,71,0.6);
+    --text:     #e2e8f5;
+    --muted:    #7a96ba;
+    --muted-2:  #4e6585;
+    --accent:   #3b82f6;
+    --accent-h: #2563eb;
+    --blue:     #60a5fa;
+    --danger:   #f85149;
+    --warn:     #f59e0b;
+    --mono:     ui-monospace, 'JetBrains Mono', 'Cascadia Code', monospace;
   }
-
   * { box-sizing: border-box; }
-  
-  body, html {
-    margin: 0;
-    height: 100vh;
-    width: 100vw;
-    background: var(--bg-base);
-    color: var(--text-primary);
-    font-family: var(--font-body);
-    overflow: hidden;
-  }
-
-  /* Layout configuration: Map takes the whole screen, UI floats over it */
-  #map {
-    position: absolute;
-    top: 0; left: 0;
-    width: 100%; height: 100%;
-    z-index: 10;
-  }
-  
-  /* Filter the maps out to give a dark, sleek tactical aesthetic */
-  .leaflet-layer, .leaflet-control-zoom-in, .leaflet-control-zoom-out, .leaflet-control-attribution {
-      filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
-  }
-
-  .ui-container {
-    position: absolute;
-    top: 20px;
-    left: 20px;
-    width: 420px;
-    height: calc(100vh - 40px);
-    z-index: 1000;
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-    pointer-events: none; /* Let clicks pass through empty spaces between panels */
-  }
-
-  .glass-panel {
-    background: var(--panel-bg);
-    backdrop-filter: var(--blur);
-    -webkit-backdrop-filter: var(--blur);
-    border: 1px solid var(--panel-border);
-    border-radius: 16px;
-    padding: 20px;
-    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
-    pointer-events: auto; /* Re-enable clicks inside panels */
-    display: flex;
-    flex-direction: column;
-  }
-
-  .header-panel {
-    flex-shrink: 0;
-  }
-
-  .header-panel h1 {
-    font-family: var(--font-heading);
-    font-size: 24px;
-    font-weight: 700;
-    margin: 0;
-    background: linear-gradient(135deg, #FFF, #00E676);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    letter-spacing: 1px;
-  }
-
-  .header-panel p {
-    margin: 8px 0 0 0;
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     font-size: 13px;
-    color: var(--text-muted);
   }
 
-  .roster-panel {
-    flex-grow: 1;
-    overflow: hidden; /* For inner scrolling */
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted-2); }
+
+  /* ── Layout ── */
+  #app { display: grid; grid-template-columns: clamp(280px, 33vw, 400px) 1fr; height: 100vh; overflow: hidden; }
+
+  /* ── Map ── */
+  #map { height: 100%; background: #c9ced3; }
+  #map .leaflet-tile-pane { filter: grayscale(20%) brightness(0.88) contrast(1.05); }
+  #map.placement-arm,
+  #map.placement-arm .leaflet-grab { cursor: crosshair; }
+
+  /* ── Sidebar ── */
+  #side {
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; height: 100%; overflow: hidden;
   }
 
-  .roster-panel h2 {
-    font-family: var(--font-heading);
-    font-size: 14px;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    color: var(--text-muted);
-    margin: 0 0 16px 0;
-    border-bottom: 1px solid var(--panel-border);
-    padding-bottom: 8px;
+  /* ── Header ── */
+  #side > header {
+    padding: 14px 18px 13px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(59,130,246,0.06) 0%, transparent 100%);
+    flex-shrink: 0;
+    position: relative;
   }
+  #side > header::after {
+    content: '';
+    position: absolute; bottom: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, var(--accent) 0%, transparent 60%);
+    opacity: 0.4;
+  }
+  .brand-row { display: flex; align-items: center; gap: 11px; }
+  .brand-logo { height: 46px; width: auto; filter: drop-shadow(0 0 8px rgba(59,130,246,0.35)); }
+  .brand-name {
+    font-size: 15px; font-weight: 700; letter-spacing: 4px; text-transform: uppercase;
+    color: var(--text);
+    text-shadow: 0 0 20px rgba(59,130,246,0.25);
+  }
+  .brand-sub { font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted-2); margin-top: 1px; }
 
-  /* List of connected drones */
-  .drone-list {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
+  /* ── Scrollable body ── */
+  #side-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column; min-height: 0; }
+
+  /* ── Sections ── */
+  .section { border-bottom: 1px solid var(--border-s); flex-shrink: 0; }
+
+  .section-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 9px 18px; cursor: pointer; user-select: none;
+    transition: background 0.12s;
+  }
+  .section-head:hover { background: var(--panel-2); }
+  .section-head h2 {
+    margin: 0; font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase;
+    color: var(--muted); font-weight: 600;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .section-head .chevron { color: var(--muted-2); font-size: 9px; transition: transform 0.2s ease; }
+  .section-head.is-collapsed .chevron { transform: rotate(-90deg); }
+
+  .section-body { padding: 0 16px 14px; }
+  .section-body.is-hidden { display: none; }
+
+  .section--static .section-head { cursor: default; pointer-events: none; }
+
+  /* ── Prompt ── */
+  #prompt-textarea {
+    width: 100%; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 9px 11px; font-family: inherit; font-size: 12px;
+    resize: vertical; min-height: 70px; line-height: 1.55; outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  #prompt-textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(59,130,246,0.12);
+  }
+  #prompt-textarea::placeholder { color: var(--muted-2); }
+  #btn-dispatch {
+    width: 100%; margin-top: 8px;
+    background: var(--accent); color: #fff;
+    border: none; border-radius: 5px;
+    padding: 7px 12px; font-size: 12px; cursor: pointer;
+    font-family: inherit; font-weight: 600; letter-spacing: 0.04em;
+    box-shadow: 0 2px 10px rgba(59,130,246,0.3);
+    transition: background 0.15s, box-shadow 0.15s;
+  }
+  #btn-dispatch:hover {
+    background: var(--accent-h);
+    box-shadow: 0 4px 16px rgba(59,130,246,0.45);
+  }
+  #btn-dispatch:active { transform: translateY(1px); }
+
+  /* ── Notifications ── */
+  .notif-badge {
+    background: var(--warn); color: #000;
+    border-radius: 999px; font-size: 9px; font-weight: 700; padding: 1px 5px;
+  }
+  .notif-badge:empty { display: none; }
+  .notif-empty { font-size: 11px; color: var(--muted); padding: 4px 0 2px; }
+  .notif-list { list-style: none; margin: 0; padding: 0; max-height: 200px; overflow-y: auto; }
+  .notif-item {
+    padding: 5px 0; border-top: 1px solid var(--border-s);
+    display: flex; gap: 8px; align-items: baseline; font-size: 11px;
+  }
+  .notif-item:first-child { border-top: none; }
+  .notif-ts { color: var(--muted-2); flex-shrink: 0; font-family: var(--mono); font-size: 10px; }
+  .notif-drone { color: var(--blue); font-weight: 600; flex-shrink: 0; }
+  .notif-text { flex: 1; color: var(--text); }
+  .notif-item.is-warn .notif-text { color: var(--warn); }
+  .notif-item.is-alert .notif-text { color: var(--danger); font-weight: 600; }
+
+  /* ── Register button ── */
+  #btn-register {
+    width: 100%; margin-bottom: 10px;
+    background: transparent; color: var(--muted);
+    border: 1px dashed var(--border); border-radius: 5px;
+    padding: 6px 10px; font-size: 11px; cursor: pointer; font-family: inherit;
+    transition: color 0.15s, border-color 0.15s;
+    letter-spacing: 0.03em;
+  }
+  #btn-register:hover { color: var(--accent); border-color: var(--accent); border-style: solid; }
+
+  /* ── Drones section body ── */
+  #drones-body {
+    padding: 10px 10px 14px;
+    max-height: calc(100vh - 230px);
     overflow-y: auto;
-    height: calc(100% - 35px);
-    padding-right: 8px;
   }
 
-  .drone-card {
-    background: rgba(255,255,255,0.03);
-    border: 1px solid rgba(255,255,255,0.06);
-    border-left: 3px solid var(--accent);
-    border-radius: 8px;
-    padding: 12px;
-    transition: all 0.3s ease;
+  /* ── Camera grid: 2 columns ── */
+  .empty { padding: 4px 0 2px; color: var(--muted); font-size: 11px; }
+  .drone-cameras { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+
+  .cam-tile {
+    background: #060810; border: 1px solid var(--border); border-radius: 6px;
+    overflow: hidden; aspect-ratio: 16/9; position: relative;
+    cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s;
   }
-  
-  .drone-card:hover {
-    background: rgba(255,255,255,0.08);
-    transform: translateX(4px);
+  .cam-tile:hover {
+    border-color: rgba(59,130,246,0.45);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  }
+  .cam-tile:hover .cam-expand,
+  .cam-tile:hover .cam-delete { opacity: 1; }
+
+  .cam-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+  .cam-label {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    padding: 12px 6px 4px;
+    background: linear-gradient(transparent, rgba(0,0,0,0.88));
+    font-size: 9px; color: var(--text);
+    display: flex; align-items: center; gap: 4px;
+  }
+  .cam-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: 0.02em; }
+
+  /* Status dot with pulse for online */
+  .cam-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+  .cam-dot.online  { background: #3fb950; box-shadow: 0 0 4px #3fb950; animation: pulse-dot 2.5s ease-in-out infinite; }
+  .cam-dot.offline { background: var(--danger); }
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.35; }
   }
 
-  .drone-card-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
+  /* Expand icon */
+  .cam-expand {
+    position: absolute; top: 4px; right: 4px;
+    background: rgba(0,0,0,0.7); color: var(--text);
+    border: 1px solid rgba(255,255,255,0.1); border-radius: 3px;
+    padding: 1px 4px; font-size: 9px; cursor: pointer;
+    opacity: 0; transition: opacity 0.15s;
+    text-decoration: none; line-height: 1.7;
+    backdrop-filter: blur(4px);
   }
 
-  .drone-id {
-    font-weight: 600;
-    font-size: 14px;
-    color: var(--text-primary);
-  }
-
-  .status-badge {
-    font-size: 10px;
-    font-weight: 600;
-    padding: 3px 6px;
-    border-radius: 4px;
-    background: rgba(0, 230, 118, 0.15);
-    color: var(--accent);
+  .cam-no-signal {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted-2); font-size: 9px; letter-spacing: 0.05em;
     text-transform: uppercase;
   }
 
-  .drone-coords {
-    font-family: monospace;
-    font-size: 11px;
-    color: var(--text-muted);
-    margin-bottom: 10px;
+  /* Delete button */
+  .cam-delete {
+    position: absolute; top: 4px; left: 4px;
+    background: rgba(248,81,73,0.9); color: #fff;
+    border: none; border-radius: 3px;
+    padding: 1px 5px; font-size: 9px; cursor: pointer;
+    opacity: 0; transition: opacity 0.15s; line-height: 1.7;
+    font-family: inherit;
   }
 
-  /* Video Feeds Container */
-  .video-container {
-      width: 100%;
-      height: 180px;
-      backgroundColor: #000;
-      border-radius: 6px;
-      overflow: hidden;
-      position: relative;
-      border: 1px solid var(--panel-border);
+  /* ── Pathing section ── */
+  .stripe-dir { display: flex; gap: 5px; margin-top: 7px; }
+  .stripe-dir button {
+    flex: 1; background: var(--panel-2); color: var(--muted);
+    border: 1px solid var(--border); border-radius: 5px;
+    padding: 5px 6px; font-size: 11px; cursor: pointer; font-family: inherit;
+    transition: border-color 0.13s, color 0.13s;
   }
+  .stripe-dir button:hover { border-color: var(--muted-2); color: var(--text); }
+  .stripe-dir button.active { border-color: var(--accent); color: var(--accent); background: rgba(59,130,246,0.08); }
+  .path-row { display: flex; justify-content: space-between; align-items: center; font-size: 11px; margin: 5px 0; color: var(--muted); }
+  .path-row span:last-child { font-family: var(--mono); font-size: 10px; color: var(--text); }
+  .path-hint { font-size: 10px; color: var(--muted-2); line-height: 1.55; margin-top: 8px; border-top: 1px solid var(--border-s); padding-top: 8px; }
 
-  .video-feed {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
+  /* ── Leaflet ── */
+  .leaflet-tooltip.drone-label {
+    background: rgba(13,17,23,0.93); border: 1px solid var(--border);
+    color: var(--text); font-size: 10px; padding: 2px 7px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4); border-radius: 4px;
   }
+  .leaflet-tooltip.drone-label::before { display: none; }
 
-  .video-overlay {
-      position: absolute;
-      bottom: 8px;
-      left: 8px;
-      font-size: 10px;
-      background: rgba(0,0,0,0.6);
-      padding: 2px 6px;
-      border-radius: 4px;
-  }
+  /* ── Dialogs ── */
+  .hidden { display: none !important; }
 
-  /* Prompts Panel */
-  .prompt-panel {
-      flex-shrink: 0;
+  dialog#add-dialog {
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 20px 22px; min-width: 310px;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.6);
   }
-  
-  .prompt-input-group {
-      display: flex;
-      gap: 10px;
+  dialog#add-dialog::backdrop { background: rgba(0,0,0,0.65); }
+  dialog#add-dialog h3 {
+    margin: 0 0 14px; font-size: 10px; letter-spacing: 1.5px;
+    text-transform: uppercase; color: var(--muted); font-weight: 600;
   }
+  dialog#add-dialog .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 11px; font-size: 12px; }
+  dialog#add-dialog label { color: var(--muted); font-size: 10px; letter-spacing: 0.03em; }
+  dialog#add-dialog input {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 5px;
+    padding: 7px 9px; font-family: inherit; font-size: 12px; outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  dialog#add-dialog input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(59,130,246,0.12);
+  }
+  dialog#add-dialog .actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 12px; }
+  dialog#add-dialog .error { color: var(--danger); font-size: 10px; min-height: 14px; }
+  dialog button {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 5px;
+    padding: 7px 14px; font-size: 12px; cursor: pointer; font-family: inherit;
+    transition: background 0.13s, border-color 0.13s;
+  }
+  dialog button:hover { background: var(--panel-3); border-color: var(--muted-2); }
+  dialog button.primary {
+    background: var(--accent); color: #fff; border-color: transparent;
+    box-shadow: 0 2px 8px rgba(59,130,246,0.3);
+  }
+  dialog button.primary:hover { background: var(--accent-h); box-shadow: 0 4px 14px rgba(59,130,246,0.45); }
+  .hint { font-size: 10px; color: var(--muted); line-height: 1.55; }
 
-  .prompt-input-group input {
-      flex-grow: 1;
-      background: rgba(0,0,0,0.4);
-      border: 1px solid var(--panel-border);
-      color: var(--text-primary);
-      padding: 10px 14px;
-      border-radius: 6px;
-      font-family: inherit;
-      font-size: 14px;
-      transition: border-color 0.3s;
+  /* ── Place panel ── */
+  .place-panel {
+    position: fixed; bottom: 24px;
+    left: calc(clamp(280px,33vw,400px) + (100vw - clamp(280px,33vw,400px)) / 2);
+    transform: translateX(-50%);
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px 12px; min-width: 300px; max-width: 390px;
+    z-index: 2000; box-shadow: 0 8px 32px rgba(0,0,0,0.6); font-size: 12px;
   }
-
-  .prompt-input-group input:focus {
-      outline: none;
-      border-color: var(--accent);
+  .place-panel .row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin: 7px 0; }
+  .place-panel .coords { color: var(--muted); font-size: 10px; font-family: var(--mono); }
+  .place-panel .actions { display: flex; gap: 7px; margin-top: 12px; }
+  .place-panel .actions button {
+    flex: 1; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 5px;
+    padding: 6px 9px; font-size: 11px; cursor: pointer; font-family: inherit;
+    transition: background 0.13s, border-color 0.13s;
   }
-
-  .prompt-input-group button {
-      background: transparent;
-      border: 1px solid var(--accent);
-      color: var(--accent);
-      padding: 10px 16px;
-      border-radius: 6px;
-      font-weight: 600;
-      cursor: pointer;
-      font-family: var(--font-heading);
-      transition: all 0.3s ease;
+  .place-panel .actions button:hover { background: var(--panel-3); border-color: var(--muted-2); }
+  .place-panel .actions button.primary {
+    background: var(--accent); color: #fff; border-color: transparent;
+    box-shadow: 0 2px 8px rgba(59,130,246,0.3);
   }
-
-  .prompt-input-group button:hover {
-      background: rgba(0, 230, 118, 0.1);
-  }
-  
-  .drone-marker {
-      background-color: var(--accent);
-      border: 2px solid white;
-      border-radius: 50%;
-      box-shadow: 0 0 10px var(--accent);
-  }
-  
-  /* Scrollbar custom */
-  ::-webkit-scrollbar {
-    width: 6px;
-  }
-  ::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  ::-webkit-scrollbar-thumb {
-    background: var(--panel-border);
-    border-radius: 10px;
-  }
-
+  .place-panel .actions button.primary:hover { background: var(--accent-h); }
+  .place-panel .err { color: var(--danger); font-size: 10px; min-height: 14px; margin-top: 5px; }
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+</style>
+<style>
+/* Additional tweaks */
+#drone-cameras {
+    display: grid;
+    grid-template-columns: 1fr; /* single column looks better for wide video feeds */
+    gap: 12px;
+}
+.cam-tile { aspect-ratio: auto; min-height: 140px; }
 </style>
 </head>
 <body>
+<div id="app">
 
-<div id="map"></div>
+  <!-- -- Sidebar (1/3) -- -->
+  <aside id="side">
+    <header>
+      <div class="brand-row">
+        <div>
+          <div class="brand-name">ARGUS</div>
+          <div class="brand-sub">Multi-Drone Operations</div>
+        </div>
+      </div>
+    </header>
 
-<div class="ui-container">
-  <!-- Brand Header -->
-  <div class="glass-panel header-panel">
-    <h1>ARGUS Swarm</h1>
-    <p>Passive Visualization & Orchestration Node</p>
-  </div>
+    <div id="side-body">
 
-  <!-- Dynamic Prompt Command -->
-  <div class="glass-panel prompt-panel">
-    <div class="prompt-input-group">
-      <input type="text" id="samPrompt" placeholder='Target description (e.g. "red sedan")' />
-      <button onclick="setPrompt()">Track</button>
+      <!-- Search prompt -->
+      <div class="section section--static">
+        <div class="section-head"><h2>Search Target</h2></div>
+        <div class="section-body">
+          <textarea id="prompt-textarea" rows="3" placeholder="Describe what the swarm should search for..."></textarea>
+          <button id="btn-dispatch">Dispatch to swarm</button>
+        </div>
+      </div>
+
+      <!-- Notifications -->
+      <div class="section">
+        <div class="section-head" id="notif-toggle">
+          <h2>Detections <span class="notif-badge" id="notif-badge"></span></h2>
+          <span class="chevron">?</span>
+        </div>
+        <div class="section-body" id="notif-body">
+          <p class="notif-empty" id="notif-empty">No detections yet.</p>
+          <ol class="notif-list" id="notif-list"></ol>
+        </div>
+      </div>
+
+      <!-- Drones -->
+      <div class="section">
+        <div class="section-head" id="drones-toggle">
+          <h2>Drones <span id="drone-count" style="color:var(--text);font-weight:700;">0</span></h2>
+          <span class="chevron">?</span>
+        </div>
+        <div id="drones-body">
+          <div id="drone-cameras" class="drone-cameras"></div>
+          <div id="drone-empty" class="empty hidden">No drones registered.</div>
+        </div>
+      </div>
+
     </div>
-  </div>
+  </aside>
 
-  <!-- Connected Swarm Roster + Video Feeds -->
-  <div class="glass-panel roster-panel">
-    <h2>Active Swarm (<span id="drone-count">0</span>)</h2>
-    <div class="drone-list" id="swarmlist">
-      <!-- Drone cards will be injected here via websocket payload -->
-    </div>
-  </div>
+  <!-- -- Map (2/3) -- -->
+  <div id="map"></div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-  // 1. Map Initialization
-  const DEFAULT_CENTER = [46.0569, 14.5058];
-  const map = L.map('map', { zoomControl: false }).setView(DEFAULT_CENTER, 15);
+'use strict';
+
+const DEFAULT_CENTER = [46.0569, 14.5058];
+const map = L.map('map', { zoomControl: true }).setView(DEFAULT_CENTER, 15);
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
+
+let mapCentered = false;
+let droneMarkers = {}; 
+let dronePaths = {};   
+let unreadCount = 0;
+
+function addDetection(droneId, text, cls) {
+  const empty = document.getElementById('notif-empty');
+  if (empty) empty.style.display = 'none';
+
+  const badge = document.getElementById('notif-badge');
+  const list = document.getElementById('notif-list');
+  const notifBody = document.getElementById('notif-body');
+
+  const li = document.createElement('li');
+  if (cls) li.className = 'notif-item is-' + cls;
+  else li.className = 'notif-item';
+  const ts = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
   
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-    maxZoom: 19
-  }).addTo(map);
+  li.innerHTML = `<span class="notif-ts">${ts}</span><span class="notif-drone">${esc(droneId)}</span><span class="notif-text">${esc(text)}</span>`;
+  list.insertBefore(li, list.firstChild);
+  while (list.children.length > 50) list.removeChild(list.lastChild);
 
-  let mapCentered = false;
-
-  // 2. Global State & Visual Layer Arrays
-  let droneMarkers = {}; // Leaflet circle markers bounded to uuid
-  let dronePaths = {};   // Leaflet polylines bounded to uuid
-
-  const listContainer = document.getElementById('swarmlist');
-  const countEl = document.getElementById('drone-count');
-
-  function createDroneCardHtml(drone) {
-      // Build the UI card mapping data pushed passively from the edge
-      const id = drone.id;
-      const lat = (drone.lat || 0).toFixed(5);
-      const lng = (drone.lng || 0).toFixed(5);
-      
-      const batt = drone.telemetry?.batteryLevel || 0;
-      const alt = drone.telemetry?.location?.altitude || 0;
-      const cardColor = drone.color || 'var(--accent)';
-      
-      return `
-        <div class="drone-card" id="card-${id}" style="border-left: 3px solid ${cardColor};">
-            <div class="drone-card-header">
-                <span class="drone-id">${id}</span>
-                <span class="status-badge">LIVE</span>
-            </div>
-            <div class="drone-coords">
-               Pos: ${lat}, ${lng} | Alt: ${alt}m | Batt: ${batt}%
-            </div>
-            <div class="video-container">
-                <img src="/api/swarm/${id}/video.mjpg" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\'><rect width=\\'100%\\' height=\\'100%\\' fill=\\'%23111\\'/><text x=\\'50%\\' y=\\'50%\\' fill=\\'%23555\\' text-anchor=\\'middle\\' font-family=\\'Arial\\'>Waiting for edge feed...</text></svg>'" class="video-feed" alt="Drone Video Feed"/>
-                <div class="video-overlay">${id} Edge Stream</div>
-            </div>
-        </div>
-      `;
+  if (!notifBody.classList.contains('is-hidden')) {
+    // already open
+  } else {
+    unreadCount++;
+    badge.textContent = unreadCount > 9 ? '9+' : String(unreadCount);
   }
+}
 
-  // 3. Setup Passive WebSocket Listeners
-  function connectWs() {
-      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      const ws = new WebSocket(`${proto}://${location.host}/ws/drones`);
+window.argusAddDetection = addDetection;
 
-      ws.onmessage = (event) => {
-          const data = JSON.parse(event.data);
-          const drones = data.drones || [];
-          countEl.innerText = drones.length;
-          
-          let activeIds = new Set();
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
-          // Evaluate payload
-          drones.forEach(d => {
-              activeIds.add(d.id);
-              
-              const c_lat = d.lat || DEFAULT_CENTER[0];
-              const c_lng = d.lng || DEFAULT_CENTER[1];
+function createDroneCardHtml(drone) {
+    const id = drone.id;
+    const cardColor = drone.color || 'var(--accent)';
+    return `
+      <div class="cam-tile" id="card-${id}" style="border-left: 3px solid ${cardColor};">
+          <img src="/api/swarm/${id}/video.mjpg" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\'><rect width=\'100%\' height=\'100%\' fill=\'%23111\'/><text x=\'50%\' y=\'50%\' fill=\'%23555\' text-anchor=\'middle\' font-family=\'Arial\'>Waiting for edge feed...</text></svg>'" alt="Drone Video Feed"/>
+          <div class="cam-label">
+              <span class="cam-dot online"></span>
+              <span class="cam-name">${esc(id)} Edge Stream</span>
+          </div>
+      </div>
+    `;
+}
 
-              // Init position if not mapped
-              if (!mapCentered) {
-                  map.setView([c_lat, c_lng], 16);
-                  mapCentered = true;
-              }
+function connectWs() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${proto}://${location.host}/ws/drones`);
 
-              // Update or Create the Map Marker
-              const markerColor = d.color || '#00E676';
-              const markerHtml = `<div style="background-color: ${markerColor}; border: 2px solid white; border-radius: 50%; box-shadow: 0 0 10px ${markerColor}; width: 14px; height: 14px;"></div>`;
-              
-              if (droneMarkers[d.id]) {
-                  droneMarkers[d.id].setLatLng([c_lat, c_lng]);
-                  droneMarkers[d.id].setIcon(L.divIcon({html: markerHtml, className: '', iconSize: [14, 14]}));
-              } else {
-                  droneMarkers[d.id] = L.marker([c_lat, c_lng], {
-                      icon: L.divIcon({html: markerHtml, className: '', iconSize: [14, 14]})
-                  }).addTo(map);
-              }
+    ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        const drones = data.drones || [];
+        const alerts = data.alerts || [];
+        
+        document.getElementById('drone-count').innerText = drones.length;
+        
+        if (drones.length > 0) {
+             document.getElementById('drone-empty').style.display = 'none';
+        } else {
+             document.getElementById('drone-empty').style.display = 'block';
+        }
 
-              // Update or Create the Map Patrol Path line
-              if (d.path && d.path.length > 0) {
-                  const pts = d.path.map(p => [p.lat, p.lon]);
-                  if (dronePaths[d.id]) {
-                      dronePaths[d.id].setLatLngs(pts);
-                      dronePaths[d.id].setStyle({color: markerColor});
-                  } else {
-                      dronePaths[d.id] = L.polyline(pts, {color: markerColor, weight: 2, dashArray: '5,5'}).addTo(map);
-                  }
-              } else if (dronePaths[d.id]) {
-                  map.removeLayer(dronePaths[d.id]);
-                  delete dronePaths[d.id];
-              }
+        // Push new alerts natively to the tray
+        alerts.forEach(a => {
+            addDetection(a.droneId, a.text, a.cls);
+        });
+        
+        let activeIds = new Set();
+        const listContainer = document.getElementById('drone-cameras');
 
-              // Update UI Card (Only create if missing so we don't reload the <img> tag)
-              let card = document.getElementById(`card-${d.id}`);
-              if (!card) {
-                  listContainer.insertAdjacentHTML('beforeend', createDroneCardHtml(d));
-              } else {
-                  // Just update the stats dynamically
-                  const batt = d.telemetry?.batteryLevel || 0;
-                  const alt = d.telemetry?.location?.altitude || 0;
-                  const coordStr = `Pos: ${c_lat.toFixed(5)}, ${c_lng.toFixed(5)} | Alt: ${alt}m | Batt: ${batt}%`;
-                  card.querySelector('.drone-coords').innerText = coordStr;
-              }
-          });
+        drones.forEach(d => {
+            activeIds.add(d.id);
+            const c_lat = d.lat || DEFAULT_CENTER[0];
+            const c_lng = d.lng || DEFAULT_CENTER[1];
 
-          // Cleanup disconnected drones
-          for (const mappedId in droneMarkers) {
-              if (!activeIds.has(mappedId)) {
-                  map.removeLayer(droneMarkers[mappedId]);
-                  delete droneMarkers[mappedId];
-                  if (dronePaths[mappedId]) {
-                      map.removeLayer(dronePaths[mappedId]);
-                      delete dronePaths[mappedId];
-                  }
-                  let extinctCard = document.getElementById(`card-${mappedId}`);
-                  if (extinctCard) extinctCard.remove();
-              }
-          }
-      };
+            if (!mapCentered) { map.setView([c_lat, c_lng], 16); mapCentered = true; }
 
-      ws.onclose = () => {
-          console.log("WebSocket Disconnected. Reconnecting...");
-          setTimeout(connectWs, 2000);
-      };
+            const markerColor = d.color || '#00E676';
+            const markerHtml = `<div style="background-color: ${markerColor}; border: 2px solid white; border-radius: 50%; box-shadow: 0 0 10px ${markerColor}; width: 14px; height: 14px;"></div>`;
+            
+            if (droneMarkers[d.id]) {
+                droneMarkers[d.id].setLatLng([c_lat, c_lng]);
+                droneMarkers[d.id].setIcon(L.divIcon({html: markerHtml, className: '', iconSize: [14, 14]}));
+            } else {
+                droneMarkers[d.id] = L.marker([c_lat, c_lng], { icon: L.divIcon({html: markerHtml, className: '', iconSize: [14, 14]}) }).addTo(map);
+            }
+
+            if (d.path && d.path.length > 0) {
+                const pts = d.path.map(p => [(p.lat || p.latitude), (p.lon || p.longitude)]);
+                if (dronePaths[d.id]) {
+                    dronePaths[d.id].setLatLngs(pts);
+                    dronePaths[d.id].setStyle({color: markerColor});
+                } else {
+                    dronePaths[d.id] = L.polyline(pts, {color: markerColor, weight: 2, dashArray: '5,5'}).addTo(map);
+                }
+            } else if (dronePaths[d.id]) {
+                map.removeLayer(dronePaths[d.id]);
+                delete dronePaths[d.id];
+            }
+
+            let card = document.getElementById(`card-${d.id}`);
+            if (!card) { listContainer.insertAdjacentHTML('beforeend', createDroneCardHtml(d)); }
+        });
+
+        for (const mappedId in droneMarkers) {
+            if (!activeIds.has(mappedId)) {
+                map.removeLayer(droneMarkers[mappedId]);
+                delete droneMarkers[mappedId];
+                if (dronePaths[mappedId]) { map.removeLayer(dronePaths[mappedId]); delete dronePaths[mappedId]; }
+                let extinctCard = document.getElementById(`card-${mappedId}`);
+                if (extinctCard) extinctCard.remove();
+            }
+        }
+
+    };
+
+    ws.onclose = () => { setTimeout(connectWs, 2000); };
+}
+
+connectWs();
+
+document.getElementById('btn-dispatch').addEventListener('click', () => {
+    const p = document.getElementById('prompt-textarea').value;
+    if (p !== undefined) {
+        fetch('/api/prompt', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({prompt: p})
+        }).catch(e => console.error("Prompt failed to send:", e));
+    }
+});
+
+document.getElementById('notif-toggle').addEventListener('click', () => {
+  const body = document.getElementById('notif-body');
+  const nowHidden = body.classList.toggle('is-hidden');
+  document.getElementById('notif-toggle').classList.toggle('is-collapsed', nowHidden);
+  if (!nowHidden) {
+    unreadCount = 0;
+    document.getElementById('notif-badge').textContent = '';
   }
+});
 
-  // Start passive listening
-  connectWs();
-
-  function setPrompt() {
-      const p = document.getElementById('samPrompt').value;
-      if (p !== undefined) { // Allow empty string to clear the tracker
-          console.log("Setting Master Prompt for server SAM loop:", p);
-          fetch('/api/prompt', {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({prompt: p})
-          }).catch(e => console.error("Prompt failed to send:", e));
-      }
-  }
+document.getElementById('drones-toggle').addEventListener('click', () => {
+  const body = document.getElementById('drones-body');
+  const nowHidden = body.classList.toggle('is-hidden');
+  document.getElementById('drones-toggle').classList.toggle('is-collapsed', nowHidden);
+});
 
 </script>
 </body>

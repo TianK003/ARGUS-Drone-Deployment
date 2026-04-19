@@ -131,6 +131,13 @@ class VisionDaemon:
                         if (hasattr(r, 'masks') and r.masks is not None and len(r.masks) > 0) or \
                            (hasattr(r, 'boxes') and r.boxes is not None and len(r.boxes) > 0):
                             print(f"\n[SAM THREAT ALERT] POSITIVE IDENTIFICATION -> '{current_prompt}' identified physically via {drone_id}!\n")
+                            # Emit detection payload to UI via WebSocket
+                            self.registry.push_alert({
+                                "droneId": drone_id,
+                                "text": current_prompt,
+                                "ts": int(time.time() * 1000),
+                                "cls": "alert"
+                            })
                             # Add a brief pause to stop console spamming during lock
                             time.sleep(1.0)
                             

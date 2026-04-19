@@ -198,7 +198,7 @@ async def ws_drones(ws: WebSocket):
     try:
         while True:
             snapshots = reg.list()
-            await ws.send_json({"ts": time.time(), "drones": snapshots})
+            await ws.send_json({"ts": time.time(), "drones": snapshots, "alerts": reg.pop_alerts()})
             await asyncio.sleep(TELEMETRY_FANOUT_INTERVAL)
     except WebSocketDisconnect:
         pass
