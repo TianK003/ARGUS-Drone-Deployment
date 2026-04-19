@@ -34,10 +34,13 @@ This work is part of the WildDrone project, funded by the European Union's Horiz
 
 ### Key Features
 
-- **Real-time AI Vision (SAM 3.1)**: Centralized `VisionDaemon` runs SAM 3.1 round-robin over every connected drone's live frame against a natural-language prompt, stores the last 50 annotated hit-frames, and surfaces every detection (drone, prompt, GPS, SAM-overlaid frame) to the UI via WebSocket fan-out.
+- **Real-time AI Vision (SAM 3.1)**: Centralized `VisionDaemon` runs SAM 3.1 round-robin over every connected drone's live frame against a natural-language prompt, stores the last 50 annotated hit-frames AND the last 50 un-annotated raw frames, and surfaces every detection (drone, prompt, GPS, SAM-overlaid frame) to the UI via WebSocket fan-out.
+- **Gemini Image Descriptions**: Every detection carries an opt-in "Description" checkbox. On demand, the raw un-annotated frame is POSTed to `gemini-flash-latest` with a **subject-only** prompt — Gemini describes just the detected object (e.g. *"Silver metallic travel mug with matte finish and a black lid"*) plus a 0-100 confidence score, cached server- AND client-side so each detection costs at most one API call. Key lives in a gitignored `.env`; missing key degrades gracefully to a fallback response.
+- **Light / Dark Dashboard Theme**: Glassmorphic UI with a sun/moon toggle in the header. Theme is persisted in `localStorage`, falls back to `prefers-color-scheme`, and is applied before first paint to avoid a flash.
 - **Detection Dashboard**: Clickable live detection list with per-detection fullscreen lightbox, auto-pinning of every hit on the Leaflet map with hover-preview of the frame, a full-screen expanded detections panel, and transient toast notifications.
 - **Edge-Driven Architecture**: Drones join the hub natively via WebSockets and push their own telemetry and video; no manual pre-registration, no server-side RTSP pull.
-- **Server-Side Path Allocation**: Dynamic zigzag/sweep sector assignment across the swarm, recomputed whenever a drone joins or leaves to preserve non-overlapping coverage.
+- **Server-Side Path Allocation**: Dynamic zigzag/sweep sector assignment across the swarm, skipped for drones already flying an active mission so in-flight paths aren't yanked when a new drone joins.
+- **Hardened Control Loop (Python-side)**: The trajectory wire format now carries a non-zero pure-pursuit lookahead (prevents perpendicular oscillation caused by a positional-argument collision in the unchanged Android handler), and the edge client uses a 5 m / 4 s dwell / 10 s cooldown reversal state machine that absorbs Mini-3-Pro-grade GPS noise (±2–4 m) near patrol endpoints.
 - **Real-time Telemetry**: 20 Hz edge-side sampling, 1 Hz dashboard fan-out via `/ws/drones`.
 - **Live Swarm Video**: Every connected drone renders as an MJPEG tile; any tile opens full-screen in the same lightbox used for detection frames.
 - **Multi-drone Coordination**: Tested concurrent fleets with sub-100 ms command latency inside the edge stack.
@@ -250,6 +253,17 @@ pip install -r requirements.txt
 ```
 *Note: a CUDA GPU is strongly recommended for SAM 3.1. `--cpu` works for dev but runs seconds per frame.*
 
+#### 1b. Gemini API key (optional, enables the "Description" feature)
+Get a key at [Google AI Studio](https://aistudio.google.com/apikey) and drop it into a new `.env` file **inside `GroundStation/WebServer/`**:
+
+```bash
+echo 'GEMINI_API_KEY=YOUR_KEY_HERE' > GroundStation/WebServer/.env
+# Optional — override the model; default is gemini-flash-latest:
+# echo 'GEMINI_MODEL=gemini-2.5-flash' >> GroundStation/WebServer/.env
+```
+
+`.env` is gitignored (`*.env` in the repo root `.gitignore`). Without a key the hub still boots — the Description checkbox returns a graceful fallback (`"(description unavailable)"`, confidence 0) instead of 500-ing.
+
 #### 2. Run the Hub
 ```bash
 python -m app
@@ -285,8 +299,10 @@ For a second simulated drone, run a second `mock_remote.py` on different ports (
 | GET | `/api/health` | Hub liveness + active-drone count |
 | GET | `/api/drones` | All drone telemetry snapshots |
 | POST | `/api/prompt` | `{prompt}` — set the master SAM 3.1 tracking prompt |
-| GET | `/api/detections` | All detection metadata (append-only history, cap 1000) |
+| GET | `/api/detections` | All detection metadata (append-only history, cap 1000). Each entry carries `has_image`, `has_raw_image`, and — once Gemini has been queried — `description` + `confidence` |
 | GET | `/api/detections/{id}/image.jpg` | SAM-overlaid JPEG for the detection; 404 once evicted (latest 50 retained) |
+| GET | `/api/detections/{id}/raw_image.jpg` | Un-annotated JPEG captured at the same instant as the overlaid frame. Same 50-entry FIFO, same 404-on-eviction. The Description feature feeds this image to Gemini |
+| POST | `/api/detections/{id}/describe` | On first call: POSTs the raw JPEG + the SAM prompt to `gemini-flash-latest` with a subject-only prompt template, parses `CONFIDENCE: NN`, and caches the result. Returns `{description, confidence, cached}`. Subsequent calls for the same detection hit the cache |
 | WS | `/ws/drones` | 1 Hz fan-out of telemetry snapshots + new-detection alerts to the dashboard |
 | WS | `/ws/swarm/{uuid}` | Edge-client bidirectional channel: join, telemetry, path updates |
 | POST | `/api/swarm/{uuid}/video` | Edge-client raw JPEG ingest |

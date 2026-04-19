@@ -1,1146 +1,2349 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="UTF-8" />
-<title>ARGUS Hub</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<style>
-  :root {
-    --bg:       #0d1117;
-    --panel:    #161b27;
-    --panel-2:  #1e2538;
-    --panel-3:  #242d45;
-    --border:   #263047;
-    --border-s: rgba(38,48,71,0.6);
-    --text:     #e2e8f5;
-    --muted:    #7a96ba;
-    --muted-2:  #4e6585;
-    --accent:   #3b82f6;
-    --accent-h: #2563eb;
-    --blue:     #60a5fa;
-    --danger:   #f85149;
-    --warn:     #f59e0b;
-    --mono:     ui-monospace, 'JetBrains Mono', 'Cascadia Code', monospace;
-  }
-  * { box-sizing: border-box; }
-  html, body {
-    margin: 0; height: 100%;
-    background: var(--bg); color: var(--text);
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-    font-size: 13px;
-  }
+  <meta charset="UTF-8" />
+  <title>ARGUS Hub</title>
+  <!-- Apply the persisted theme BEFORE stylesheet paints to avoid a flash.
+     Kept tiny & inline so the first paint already has the right palette. -->
+  <script>
+    (function () {
+      var stored = null;
+      try { stored = localStorage.getItem('argus-theme'); } catch (_) { }
+      var theme = stored || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      document.documentElement.dataset.theme = theme;
+    })();
+  </script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+  <style>
+    :root {
+      /* Dark palette — applied by default and when data-theme="dark". */
+      --bg: #0d1117;
+      --panel: #161b27;
+      --panel-2: #1e2538;
+      --panel-3: #242d45;
+      --border: #263047;
+      --border-s: rgba(38, 48, 71, 0.6);
+      --text: #e2e8f5;
+      --muted: #7a96ba;
+      --muted-2: #4e6585;
+      --accent: #3b82f6;
+      --accent-h: #2563eb;
+      --blue: #60a5fa;
+      --danger: #f85149;
+      --warn: #f59e0b;
+      --accent-glow: rgba(59, 130, 246, 0.35);
+      --accent-glow-soft: rgba(59, 130, 246, 0.12);
+      --toast-bg: rgba(20, 26, 40, 0.97);
+      --map-tile-filter: grayscale(20%) brightness(0.88) contrast(1.05);
+      --mono: ui-monospace, 'JetBrains Mono', 'Cascadia Code', monospace;
+    }
 
-  /* ── Scrollbar ── */
-  ::-webkit-scrollbar { width: 5px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
-  ::-webkit-scrollbar-thumb:hover { background: var(--muted-2); }
+    :root[data-theme="light"] {
+      /* Light palette — neutral off-white surfaces with dark-gray text for daylight
+       legibility without the eye-strain of pure black-on-white. Borders deliberately
+       deep so panel edges and form outlines stay clearly visible. */
+      --bg: #e2e2df;
+      /* main app bg — cool neutral off-white */
+      --panel: #ededeb;
+      /* primary panels — lighter off-white */
+      --panel-2: #d4d4d1;
+      /* hover / section backgrounds */
+      --panel-3: #c0c0bd;
+      /* deeper neutral for chips + accents */
+      --border: #555552;
+      /* strong, clearly-visible dark neutral gray border */
+      --border-s: rgba(60, 60, 58, 0.3);
+      /* subtler divider for inline separators */
+      --text: #242422;
+      /* dark neutral gray — NOT pure black */
+      --muted: #4e4e4b;
+      /* mid gray for secondary text */
+      --muted-2: #6e6e6b;
+      /* lighter gray for captions */
+      --accent: #1e40af;
+      /* deeper royal blue for strong contrast on off-white */
+      --accent-h: #1e3a8a;
+      --blue: #1e40af;
+      --danger: #991b1b;
+      --warn: #92400e;
+      --accent-glow: rgba(30, 64, 175, 0.22);
+      --accent-glow-soft: rgba(30, 64, 175, 0.09);
+      --toast-bg: rgba(237, 237, 235, 0.98);
+      --map-tile-filter: none;
+    }
 
-  /* ── Layout ── */
-  #app { display: grid; grid-template-columns: clamp(280px, 33vw, 400px) 1fr; height: 100vh; overflow: hidden; }
+    * {
+      box-sizing: border-box;
+    }
 
-  /* ── Map ── */
-  #map { height: 100%; background: #c9ced3; }
-  #map .leaflet-tile-pane { filter: grayscale(20%) brightness(0.88) contrast(1.05); }
-  #map.placement-arm,
-  #map.placement-arm .leaflet-grab { cursor: crosshair; }
+    html,
+    body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      font-size: 13px;
+    }
 
-  /* ── Sidebar ── */
-  #side {
-    background: var(--panel);
-    border-right: 1px solid var(--border);
-    display: flex; flex-direction: column; height: 100%; overflow: hidden;
-  }
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar {
+      width: 5px;
+    }
 
-  /* ── Header ── */
-  #side > header {
-    padding: 14px 18px 13px;
-    border-bottom: 1px solid var(--border);
-    background: linear-gradient(180deg, rgba(59,130,246,0.06) 0%, transparent 100%);
-    flex-shrink: 0;
-    position: relative;
-  }
-  #side > header::after {
-    content: '';
-    position: absolute; bottom: 0; left: 0; right: 0; height: 1px;
-    background: linear-gradient(90deg, var(--accent) 0%, transparent 60%);
-    opacity: 0.4;
-  }
-  .brand-row { display: flex; align-items: center; gap: 11px; }
-  .brand-logo { height: 46px; width: auto; filter: drop-shadow(0 0 8px rgba(59,130,246,0.35)); }
-  .brand-name {
-    font-size: 15px; font-weight: 700; letter-spacing: 4px; text-transform: uppercase;
-    color: var(--text);
-    text-shadow: 0 0 20px rgba(59,130,246,0.25);
-  }
-  .brand-sub { font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted-2); margin-top: 1px; }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
 
-  /* ── Scrollable body ── */
-  #side-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column; min-height: 0; }
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 999px;
+    }
 
-  /* ── Sections ── */
-  .section { border-bottom: 1px solid var(--border-s); flex-shrink: 0; }
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--muted-2);
+    }
 
-  .section-head {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 9px 18px; cursor: pointer; user-select: none;
-    transition: background 0.12s;
-  }
-  .section-head:hover { background: var(--panel-2); }
-  .section-head h2 {
-    margin: 0; font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase;
-    color: var(--muted); font-weight: 600;
-    display: flex; align-items: center; gap: 7px;
-  }
-  .section-head .chevron { color: var(--muted-2); font-size: 9px; transition: transform 0.2s ease; }
-  .section-head.is-collapsed .chevron { transform: rotate(-90deg); }
+    /* ── Layout ── */
+    #app {
+      display: grid;
+      grid-template-columns: clamp(280px, 33vw, 400px) 1fr;
+      height: 100vh;
+      overflow: hidden;
+    }
 
-  .section-body { padding: 0 16px 14px; }
-  .section-body.is-hidden { display: none; }
+    /* ── Map (Leaflet 2D) ── */
+    #map {
+      height: 100%;
+      background: #c9ced3;
+    }
 
-  .section--static .section-head { cursor: default; pointer-events: none; }
+    #map .leaflet-tile-pane {
+      filter: var(--map-tile-filter);
+    }
 
-  /* ── Prompt ── */
-  #prompt-textarea {
-    width: 100%; background: var(--panel-2); color: var(--text);
-    border: 1px solid var(--border); border-radius: 6px;
-    padding: 9px 11px; font-family: inherit; font-size: 12px;
-    resize: vertical; min-height: 70px; line-height: 1.55; outline: none;
-    transition: border-color 0.15s, box-shadow 0.15s;
-  }
-  #prompt-textarea:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(59,130,246,0.12);
-  }
-  #prompt-textarea::placeholder { color: var(--muted-2); }
-  #btn-dispatch {
-    width: 100%; margin-top: 8px;
-    background: var(--accent); color: #fff;
-    border: none; border-radius: 5px;
-    padding: 7px 12px; font-size: 12px; cursor: pointer;
-    font-family: inherit; font-weight: 600; letter-spacing: 0.04em;
-    box-shadow: 0 2px 10px rgba(59,130,246,0.3);
-    transition: background 0.15s, box-shadow 0.15s;
-  }
-  #btn-dispatch:hover {
-    background: var(--accent-h);
-    box-shadow: 0 4px 16px rgba(59,130,246,0.45);
-  }
-  #btn-dispatch:active { transform: translateY(1px); }
+    #map.placement-arm,
+    #map.placement-arm .leaflet-grab {
+      cursor: crosshair;
+    }
 
-  /* ── Notifications ── */
-  .notif-badge {
-    background: var(--warn); color: #000;
-    border-radius: 999px; font-size: 10px; font-weight: 700; padding: 1px 6px;
-  }
-  .notif-badge:empty { display: none; }
-  .notif-empty { font-size: 13px; color: var(--muted); padding: 6px 0 4px; }
-  .notif-list { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow-y: auto; }
-  .notif-item {
-    padding: 8px 6px; border-top: 1px solid var(--border-s);
-    display: flex; gap: 10px; align-items: baseline; font-size: 14px;
-    cursor: pointer; border-radius: 4px;
-    transition: background 0.12s;
-  }
-  .notif-item:hover { background: var(--panel-2); }
-  .notif-item:first-child { border-top: none; }
-  .notif-ts { color: var(--muted-2); flex-shrink: 0; font-family: var(--mono); font-size: 12px; }
-  .notif-drone { color: var(--blue); font-weight: 700; flex-shrink: 0; font-size: 14px; }
-  .notif-text { flex: 1; color: var(--text); font-size: 14px; }
-  .notif-item.is-warn .notif-text { color: var(--warn); }
-  .notif-item.is-alert .notif-text { color: var(--danger); font-weight: 600; }
+    /* ── Map (MapLibre 3D) ── */
+    /* Sits in the same grid cell as #map and is positioned absolutely so it overlaps
+     exactly; JS toggles visibility by adding/removing the `is-hidden` modifier.
+     NB: using a class rather than `style.display=''` because otherwise we'd have to
+     remember `display: block` vs `display: none` at every toggle site. */
+    .map-container {
+      position: relative;
+      height: 100%;
+      overflow: hidden;
+    }
 
-  /* Expand button inside the Detections section-head */
-  .notif-expand {
-    background: transparent; color: var(--muted-2);
-    border: 1px solid var(--border); border-radius: 3px;
-    padding: 0 5px; margin-right: 6px;
-    font-size: 11px; cursor: pointer; line-height: 1.4;
-    font-family: inherit;
-    transition: color 0.15s, border-color 0.15s;
-  }
-  .notif-expand:hover { color: var(--accent); border-color: var(--accent); }
+    #map,
+    #map3d {
+      position: absolute;
+      inset: 0;
+      height: 100%;
+      width: 100%;
+      background: #c9ced3;
+    }
 
-  /* ── Detections panel (replaces map) ── */
-  #detections-panel {
-    display: none;
-    flex-direction: column;
-    background: var(--bg);
-    height: 100vh; overflow: hidden;
-    min-height: 0;   /* grid child needs this to respect 100vh in some browsers */
-  }
-  #detections-panel.is-open { display: flex; }
-  .det-panel-head {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 14px 20px; border-bottom: 1px solid var(--border);
-    background: var(--panel);
-    flex-shrink: 0;
-  }
-  .det-panel-head h2 {
-    margin: 0; font-size: 13px; letter-spacing: 2px; text-transform: uppercase;
-    color: var(--text); font-weight: 700;
-  }
-  .det-panel-head h2 .count {
-    color: var(--muted); font-weight: 400; margin-left: 8px; letter-spacing: 0;
-    text-transform: none; font-size: 11px;
-  }
-  .det-close {
-    background: transparent; color: var(--muted);
-    border: 1px solid var(--border); border-radius: 5px;
-    padding: 5px 12px; font-size: 11px; cursor: pointer; font-family: inherit;
-    letter-spacing: 0.03em;
-    transition: color 0.15s, border-color 0.15s;
-  }
-  .det-close:hover { color: var(--accent); border-color: var(--accent); }
-  .det-panel-body {
-    flex: 1 1 0;
-    min-height: 0;         /* critical: lets overflow-y actually scroll inside a flex parent */
-    overflow-y: auto;
-    padding: 18px 20px;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    grid-auto-rows: max-content;   /* rows size to their tallest card and no more */
-    gap: 16px;
-  }
-  .det-empty {
-    grid-column: 1 / -1;
-    color: var(--muted); font-size: 12px; padding: 20px; text-align: center;
-  }
+    #map.is-hidden,
+    #map3d.is-hidden {
+      display: none;
+    }
 
-  /* Cards use plain block layout — no flex, no align-self, nothing that can
+    /* 2D/3D mode toggle — floats over whichever map is currently visible. */
+    .map-mode-toggle {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 500;
+      display: flex;
+      gap: 0;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+      overflow: hidden;
+      font-family: inherit;
+    }
+
+    .map-mode-toggle button {
+      background: transparent;
+      color: var(--muted);
+      border: none;
+      padding: 6px 11px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      letter-spacing: 0.04em;
+      transition: background 0.12s, color 0.12s;
+    }
+
+    .map-mode-toggle button:hover {
+      color: var(--text);
+      background: var(--panel-2);
+    }
+
+    .map-mode-toggle button.is-active {
+      color: var(--text);
+      background: var(--panel-2);
+    }
+
+    .map-mode-toggle button+button {
+      border-left: 1px solid var(--border-s);
+    }
+
+    /* ── Sidebar ── */
+    #side {
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    #side>header {
+      padding: 14px 18px 13px;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, var(--accent-glow-soft) 0%, transparent 100%);
+      flex-shrink: 0;
+      position: relative;
+    }
+
+    #side>header::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, var(--accent) 0%, transparent 60%);
+      opacity: 0.4;
+    }
+
+    .brand-row {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+    }
+
+    .brand-row .brand-spacer {
+      flex: 1;
+    }
+
+    /* ── Theme toggle (header top-right) ── */
+    #theme-toggle {
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 9px;
+      font-size: 14px;
+      line-height: 1;
+      cursor: pointer;
+      font-family: inherit;
+      transition: border-color 0.15s, color 0.15s, background 0.15s, transform 0.1s;
+    }
+
+    #theme-toggle:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    #theme-toggle:active {
+      transform: scale(0.95);
+    }
+
+    .brand-logo {
+      height: 46px;
+      width: auto;
+      filter: drop-shadow(0 0 8px var(--accent-glow));
+    }
+
+    .brand-name {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 4px;
+      text-transform: uppercase;
+      color: var(--text);
+      text-shadow: 0 0 20px var(--accent-glow-soft);
+    }
+
+    .brand-sub {
+      font-size: 9px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--muted-2);
+      margin-top: 1px;
+    }
+
+    /* ── Scrollable body ── */
+    #side-body {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    /* ── Sections ── */
+    .section {
+      border-bottom: 1px solid var(--border-s);
+      flex-shrink: 0;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 9px 18px;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.12s;
+    }
+
+    .section-head:hover {
+      background: var(--panel-2);
+    }
+
+    .section-head h2 {
+      margin: 0;
+      font-size: 9px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .section-head .chevron {
+      color: var(--muted-2);
+      font-size: 9px;
+      transition: transform 0.2s ease;
+    }
+
+    .section-head.is-collapsed .chevron {
+      transform: rotate(-90deg);
+    }
+
+    .section-body {
+      padding: 0 16px 14px;
+    }
+
+    .section-body.is-hidden {
+      display: none;
+    }
+
+    .section--static .section-head {
+      cursor: default;
+      pointer-events: none;
+    }
+
+    /* ── Prompt ── */
+    #prompt-textarea {
+      width: 100%;
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 9px 11px;
+      font-family: inherit;
+      font-size: 12px;
+      resize: vertical;
+      min-height: 70px;
+      line-height: 1.55;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+
+    #prompt-textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+    }
+
+    #prompt-textarea::placeholder {
+      color: var(--muted-2);
+    }
+
+    #btn-dispatch {
+      width: 100%;
+      margin-top: 8px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 5px;
+      padding: 7px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      font-family: inherit;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      box-shadow: 0 2px 10px rgba(59, 130, 246, 0.3);
+      transition: background 0.15s, box-shadow 0.15s;
+    }
+
+    #btn-dispatch:hover {
+      background: var(--accent-h);
+      box-shadow: 0 4px 16px rgba(59, 130, 246, 0.45);
+    }
+
+    #btn-dispatch:active {
+      transform: translateY(1px);
+    }
+
+    /* ── Notifications ── */
+    .notif-badge {
+      background: var(--warn);
+      color: #000;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 6px;
+    }
+
+    .notif-badge:empty {
+      display: none;
+    }
+
+    .notif-empty {
+      font-size: 13px;
+      color: var(--muted);
+      padding: 6px 0 4px;
+    }
+
+    .notif-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      max-height: 260px;
+      overflow-y: auto;
+    }
+
+    .notif-item {
+      padding: 8px 6px;
+      border-top: 1px solid var(--border-s);
+      display: flex;
+      gap: 10px;
+      align-items: baseline;
+      font-size: 14px;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: background 0.12s;
+    }
+
+    .notif-item:hover {
+      background: var(--panel-2);
+    }
+
+    .notif-item:first-child {
+      border-top: none;
+    }
+
+    .notif-ts {
+      color: var(--muted-2);
+      flex-shrink: 0;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .notif-drone {
+      color: var(--blue);
+      font-weight: 700;
+      flex-shrink: 0;
+      font-size: 14px;
+    }
+
+    .notif-text {
+      flex: 1;
+      color: var(--text);
+      font-size: 14px;
+    }
+
+    .notif-item.is-warn .notif-text {
+      color: var(--warn);
+    }
+
+    .notif-item.is-alert .notif-text {
+      color: var(--danger);
+      font-weight: 600;
+    }
+
+    /* Expand button inside the Detections section-head */
+    .notif-expand {
+      background: transparent;
+      color: var(--muted-2);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 0 5px;
+      margin-right: 6px;
+      font-size: 11px;
+      cursor: pointer;
+      line-height: 1.4;
+      font-family: inherit;
+      transition: color 0.15s, border-color 0.15s;
+    }
+
+    .notif-expand:hover {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    /* ── Detections panel (replaces map) ── */
+    #detections-panel {
+      display: none;
+      flex-direction: column;
+      background: var(--bg);
+      height: 100vh;
+      overflow: hidden;
+      min-height: 0;
+      /* grid child needs this to respect 100vh in some browsers */
+    }
+
+    #detections-panel.is-open {
+      display: flex;
+    }
+
+    .det-panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+      flex-shrink: 0;
+    }
+
+    .det-panel-head h2 {
+      margin: 0;
+      font-size: 13px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .det-panel-head h2 .count {
+      color: var(--muted);
+      font-weight: 400;
+      margin-left: 8px;
+      letter-spacing: 0;
+      text-transform: none;
+      font-size: 11px;
+    }
+
+    .det-close {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 5px 12px;
+      font-size: 11px;
+      cursor: pointer;
+      font-family: inherit;
+      letter-spacing: 0.03em;
+      transition: color 0.15s, border-color 0.15s;
+    }
+
+    .det-close:hover {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .det-panel-body {
+      flex: 1 1 0;
+      min-height: 0;
+      /* critical: lets overflow-y actually scroll inside a flex parent */
+      overflow-y: auto;
+      padding: 18px 20px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      grid-auto-rows: max-content;
+      /* rows size to their tallest card and no more */
+      gap: 16px;
+    }
+
+    .det-empty {
+      grid-column: 1 / -1;
+      color: var(--muted);
+      font-size: 12px;
+      padding: 20px;
+      text-align: center;
+    }
+
+    /* Cards use plain block layout — no flex, no align-self, nothing that can
      cause overlap in a grid row. */
-  .det-card {
-    background: var(--panel); border: 1px solid var(--border);
-    border-radius: 8px; overflow: hidden;
-    display: block;
-  }
-  .det-card-head {
-    padding: 9px 12px;
-    display: flex; align-items: baseline; gap: 8px;
-    font-size: 11px;
-    border-bottom: 1px solid var(--border-s);
-  }
-  .det-card-drone { color: var(--blue); font-weight: 700; }
-  .det-card-prompt { flex: 1; color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .det-card-ts { color: var(--muted-2); font-family: var(--mono); font-size: 10px; }
-  .det-card-image {
-    display: block; width: 100%; height: 200px;
-    background: #060810;
-    line-height: 200px; text-align: center;
-    color: var(--muted-2); font-size: 11px; letter-spacing: 0.04em;
-  }
-  .det-card-image img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .det-card-foot {
-    padding: 8px 12px;
-    display: flex; align-items: center; gap: 8px; font-size: 11px;
-    border-top: 1px solid var(--border-s);
-  }
-  .det-card-foot label {
-    display: flex; align-items: center; gap: 6px; cursor: pointer;
-    color: var(--text); user-select: none;
-  }
-  .det-card-coords { color: var(--muted); font-family: var(--mono); font-size: 10px; margin-left: auto; }
+    .det-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      display: block;
+    }
 
-  /* ── Shared fullscreen lightbox (detections + live stream) ── */
-  #lightbox {
-    position: fixed; inset: 0;
-    background: rgba(0,0,0,0.94);
-    display: none;
-    z-index: 9999;
-    align-items: center; justify-content: center;
-    padding: 40px 40px 60px;
-  }
-  #lightbox.is-open { display: flex; }
-  #lightbox-close {
-    position: absolute; top: 18px; right: 24px;
-    background: rgba(30,37,56,0.9); color: var(--text);
-    border: 1px solid var(--border); border-radius: 5px;
-    padding: 7px 14px; font-size: 14px; cursor: pointer;
-    font-family: inherit;
-  }
-  #lightbox-close:hover { border-color: var(--accent); color: var(--accent); }
-  .lightbox-inner {
-    display: flex; flex-direction: column; gap: 14px; align-items: center;
-    max-width: 100%; max-height: 100%;
-  }
-  #lightbox-img {
-    max-width: 100%; max-height: calc(100vh - 130px);
-    object-fit: contain;
-    border-radius: 6px; box-shadow: 0 10px 40px rgba(0,0,0,0.8);
-    background: #060810;
-  }
-  #lightbox-caption {
-    color: var(--text); font-size: 14px; letter-spacing: 0.04em;
-    text-align: center; max-width: 900px;
-  }
+    .det-card-head {
+      padding: 9px 12px;
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      font-size: 11px;
+      border-bottom: 1px solid var(--border-s);
+    }
 
-  /* ── Toast stack (bottom-right) ── */
-  #toast-stack {
-    position: fixed; bottom: 24px; right: 24px;
-    z-index: 10000;
-    display: flex; flex-direction: column; gap: 8px;
-    pointer-events: none;
-    max-width: 340px;
-  }
-  .toast {
-    background: rgba(20,26,40,0.97); color: var(--text);
-    border: 1px solid var(--border); border-left: 3px solid var(--danger);
-    border-radius: 6px; padding: 10px 14px;
-    font-size: 13px; line-height: 1.45;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.6);
-    opacity: 0; transform: translateY(12px);
-    transition: opacity 0.22s ease, transform 0.22s ease;
-    pointer-events: auto;
-  }
-  .toast.is-visible { opacity: 1; transform: translateY(0); }
-  .toast-drone { color: var(--blue); font-weight: 700; margin-right: 8px; }
-  .toast-text  { color: var(--text); }
+    .det-card-drone {
+      color: var(--blue);
+      font-weight: 700;
+    }
 
-  /* ── Map marker hover preview (detection tooltip) ── */
-  .det-preview-tooltip {
-    background: rgba(20,26,40,0.97); color: var(--text);
-    border: 1px solid var(--border); border-radius: 6px;
-    padding: 6px; box-shadow: 0 6px 20px rgba(0,0,0,0.6);
-    opacity: 1 !important;
-  }
-  .det-preview-tooltip::before { display: none; }   /* hide Leaflet's arrow */
-  .det-tip-img {
-    display: block; width: 220px; height: 124px;
-    object-fit: cover; border-radius: 3px; margin-bottom: 5px;
-    background: #060810;
-  }
-  .det-tip-prompt { color: var(--text); font-size: 12px; font-weight: 600; }
-  .det-tip-drone { color: var(--blue); font-size: 11px; margin-top: 2px; }
+    .det-card-prompt {
+      flex: 1;
+      color: var(--text);
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
 
-  /* ── Register button ── */
-  #btn-register {
-    width: 100%; margin-bottom: 10px;
-    background: transparent; color: var(--muted);
-    border: 1px dashed var(--border); border-radius: 5px;
-    padding: 6px 10px; font-size: 11px; cursor: pointer; font-family: inherit;
-    transition: color 0.15s, border-color 0.15s;
-    letter-spacing: 0.03em;
-  }
-  #btn-register:hover { color: var(--accent); border-color: var(--accent); border-style: solid; }
+    .det-card-ts {
+      color: var(--muted-2);
+      font-family: var(--mono);
+      font-size: 10px;
+    }
 
-  /* ── Drones section body ── */
-  #drones-body {
-    padding: 10px 10px 14px;
-    max-height: calc(100vh - 230px);
-    overflow-y: auto;
-  }
+    .det-card-image {
+      display: block;
+      width: 100%;
+      height: 200px;
+      background: #060810;
+      line-height: 200px;
+      text-align: center;
+      color: var(--muted-2);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+    }
 
-  /* ── Camera grid: 2 columns ── */
-  .empty { padding: 4px 0 2px; color: var(--muted); font-size: 11px; }
-  .drone-cameras { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+    .det-card-image img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
 
-  .cam-tile {
-    background: #060810; border: 1px solid var(--border); border-radius: 6px;
-    overflow: hidden; aspect-ratio: 16/9; position: relative;
-    cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s;
-  }
-  .cam-tile:hover {
-    border-color: rgba(59,130,246,0.45);
-    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
-  }
-  .cam-tile:hover .cam-expand,
-  .cam-tile:hover .cam-delete { opacity: 1; }
+    .det-card-foot {
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 11px;
+      border-top: 1px solid var(--border-s);
+      flex-wrap: wrap;
+    }
 
-  .cam-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .det-card-foot label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      color: var(--text);
+      user-select: none;
+    }
 
-  .cam-label {
-    position: absolute; bottom: 0; left: 0; right: 0;
-    padding: 12px 6px 4px;
-    background: linear-gradient(transparent, rgba(0,0,0,0.88));
-    font-size: 9px; color: var(--text);
-    display: flex; align-items: center; gap: 4px;
-  }
-  .cam-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: 0.02em; }
+    /* Per-card description output — lives under the foot so it spans full card width. */
+    .det-card>.desc-result {
+      margin: 0 12px 10px;
+    }
 
-  /* Status dot with pulse for online */
-  .cam-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
-  .cam-dot.online  { background: #3fb950; box-shadow: 0 0 4px #3fb950; animation: pulse-dot 2.5s ease-in-out infinite; }
-  .cam-dot.offline { background: var(--danger); }
-  @keyframes pulse-dot {
-    0%, 100% { opacity: 1; }
-    50%       { opacity: 0.35; }
-  }
+    .det-card-coords {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10px;
+      margin-left: auto;
+    }
 
-  /* Expand icon */
-  .cam-expand {
-    position: absolute; top: 4px; right: 4px;
-    background: rgba(0,0,0,0.7); color: var(--text);
-    border: 1px solid rgba(255,255,255,0.1); border-radius: 3px;
-    padding: 1px 4px; font-size: 9px; cursor: pointer;
-    opacity: 0; transition: opacity 0.15s;
-    text-decoration: none; line-height: 1.7;
-    backdrop-filter: blur(4px);
-  }
+    /* ── Shared fullscreen lightbox (detections + live stream) ── */
+    #lightbox {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.94);
+      display: none;
+      z-index: 9999;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 40px 60px;
+    }
 
-  .cam-no-signal {
-    position: absolute; inset: 0;
-    display: flex; align-items: center; justify-content: center;
-    color: var(--muted-2); font-size: 9px; letter-spacing: 0.05em;
-    text-transform: uppercase;
-  }
+    #lightbox.is-open {
+      display: flex;
+    }
 
-  /* Delete button */
-  .cam-delete {
-    position: absolute; top: 4px; left: 4px;
-    background: rgba(248,81,73,0.9); color: #fff;
-    border: none; border-radius: 3px;
-    padding: 1px 5px; font-size: 9px; cursor: pointer;
-    opacity: 0; transition: opacity 0.15s; line-height: 1.7;
-    font-family: inherit;
-  }
+    #lightbox-close {
+      position: absolute;
+      top: 18px;
+      right: 24px;
+      background: rgba(30, 37, 56, 0.9);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 7px 14px;
+      font-size: 14px;
+      cursor: pointer;
+      font-family: inherit;
+    }
 
-  /* ── Pathing section ── */
-  .stripe-dir { display: flex; gap: 5px; margin-top: 7px; }
-  .stripe-dir button {
-    flex: 1; background: var(--panel-2); color: var(--muted);
-    border: 1px solid var(--border); border-radius: 5px;
-    padding: 5px 6px; font-size: 11px; cursor: pointer; font-family: inherit;
-    transition: border-color 0.13s, color 0.13s;
-  }
-  .stripe-dir button:hover { border-color: var(--muted-2); color: var(--text); }
-  .stripe-dir button.active { border-color: var(--accent); color: var(--accent); background: rgba(59,130,246,0.08); }
-  .path-row { display: flex; justify-content: space-between; align-items: center; font-size: 11px; margin: 5px 0; color: var(--muted); }
-  .path-row span:last-child { font-family: var(--mono); font-size: 10px; color: var(--text); }
-  .path-hint { font-size: 10px; color: var(--muted-2); line-height: 1.55; margin-top: 8px; border-top: 1px solid var(--border-s); padding-top: 8px; }
+    #lightbox-close:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
 
-  /* ── Leaflet ── */
-  .leaflet-tooltip.drone-label {
-    background: rgba(13,17,23,0.93); border: 1px solid var(--border);
-    color: var(--text); font-size: 10px; padding: 2px 7px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.4); border-radius: 4px;
-  }
-  .leaflet-tooltip.drone-label::before { display: none; }
+    .lightbox-inner {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      align-items: center;
+      max-width: 100%;
+      max-height: 100%;
+    }
 
-  /* ── Dialogs ── */
-  .hidden { display: none !important; }
+    #lightbox-img {
+      max-width: 100%;
+      max-height: calc(100vh - 130px);
+      object-fit: contain;
+      border-radius: 6px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8);
+      background: #060810;
+    }
 
-  dialog#add-dialog {
-    background: var(--panel); color: var(--text);
-    border: 1px solid var(--border); border-radius: 10px;
-    padding: 20px 22px; min-width: 310px;
-    box-shadow: 0 16px 48px rgba(0,0,0,0.6);
-  }
-  dialog#add-dialog::backdrop { background: rgba(0,0,0,0.65); }
-  dialog#add-dialog h3 {
-    margin: 0 0 14px; font-size: 10px; letter-spacing: 1.5px;
-    text-transform: uppercase; color: var(--muted); font-weight: 600;
-  }
-  dialog#add-dialog .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 11px; font-size: 12px; }
-  dialog#add-dialog label { color: var(--muted); font-size: 10px; letter-spacing: 0.03em; }
-  dialog#add-dialog input {
-    background: var(--panel-2); color: var(--text);
-    border: 1px solid var(--border); border-radius: 5px;
-    padding: 7px 9px; font-family: inherit; font-size: 12px; outline: none;
-    transition: border-color 0.15s, box-shadow 0.15s;
-  }
-  dialog#add-dialog input:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(59,130,246,0.12);
-  }
-  dialog#add-dialog .actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 12px; }
-  dialog#add-dialog .error { color: var(--danger); font-size: 10px; min-height: 14px; }
-  dialog button {
-    background: var(--panel-2); color: var(--text);
-    border: 1px solid var(--border); border-radius: 5px;
-    padding: 7px 14px; font-size: 12px; cursor: pointer; font-family: inherit;
-    transition: background 0.13s, border-color 0.13s;
-  }
-  dialog button:hover { background: var(--panel-3); border-color: var(--muted-2); }
-  dialog button.primary {
-    background: var(--accent); color: #fff; border-color: transparent;
-    box-shadow: 0 2px 8px rgba(59,130,246,0.3);
-  }
-  dialog button.primary:hover { background: var(--accent-h); box-shadow: 0 4px 14px rgba(59,130,246,0.45); }
-  .hint { font-size: 10px; color: var(--muted); line-height: 1.55; }
+    #lightbox-caption {
+      color: var(--text);
+      font-size: 14px;
+      letter-spacing: 0.04em;
+      text-align: center;
+      max-width: 900px;
+    }
 
-  /* ── Place panel ── */
-  .place-panel {
-    position: fixed; bottom: 24px;
-    left: calc(clamp(280px,33vw,400px) + (100vw - clamp(280px,33vw,400px)) / 2);
-    transform: translateX(-50%);
-    background: var(--panel); color: var(--text);
-    border: 1px solid var(--border); border-radius: 10px;
-    padding: 14px 16px 12px; min-width: 300px; max-width: 390px;
-    z-index: 2000; box-shadow: 0 8px 32px rgba(0,0,0,0.6); font-size: 12px;
-  }
-  .place-panel .row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin: 7px 0; }
-  .place-panel .coords { color: var(--muted); font-size: 10px; font-family: var(--mono); }
-  .place-panel .actions { display: flex; gap: 7px; margin-top: 12px; }
-  .place-panel .actions button {
-    flex: 1; background: var(--panel-2); color: var(--text);
-    border: 1px solid var(--border); border-radius: 5px;
-    padding: 6px 9px; font-size: 11px; cursor: pointer; font-family: inherit;
-    transition: background 0.13s, border-color 0.13s;
-  }
-  .place-panel .actions button:hover { background: var(--panel-3); border-color: var(--muted-2); }
-  .place-panel .actions button.primary {
-    background: var(--accent); color: #fff; border-color: transparent;
-    box-shadow: 0 2px 8px rgba(59,130,246,0.3);
-  }
-  .place-panel .actions button.primary:hover { background: var(--accent-h); }
-  .place-panel .err { color: var(--danger); font-size: 10px; min-height: 14px; margin-top: 5px; }
-  input[type="range"] { width: 100%; accent-color: var(--accent); }
-</style>
+    /* ── Description (Gemini) block — shown inside the lightbox for detection frames
+        and inline on the expanded detection cards. Uses the same CSS class. ── */
+    .desc-block {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--text);
+      max-width: 900px;
+    }
+
+    .desc-block label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text);
+      user-select: none;
+      cursor: pointer;
+    }
+
+    .desc-result {
+      display: none;
+      padding: 8px 10px;
+      background: var(--panel-2);
+      border: 1px solid var(--border-s);
+      border-radius: 6px;
+      line-height: 1.45;
+    }
+
+    .desc-result.is-visible {
+      display: block;
+    }
+
+    .desc-result.is-loading {
+      font-style: italic;
+      color: var(--muted);
+    }
+
+    .desc-text {
+      color: var(--text);
+    }
+
+    .desc-confidence {
+      display: inline-block;
+      margin-left: 8px;
+      padding: 1px 7px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      vertical-align: middle;
+    }
+
+    .desc-confidence.is-high {
+      background: rgba(63, 185, 80, 0.18);
+      color: #3fb950;
+    }
+
+    .desc-confidence.is-mid {
+      background: rgba(245, 158, 11, 0.22);
+      color: var(--warn);
+    }
+
+    .desc-confidence.is-low {
+      background: rgba(248, 81, 73, 0.18);
+      color: var(--danger);
+    }
+
+    /* ── Toast stack (bottom-right) ── */
+    #toast-stack {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 10000;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      pointer-events: none;
+      max-width: 340px;
+    }
+
+    .toast {
+      background: rgba(20, 26, 40, 0.97);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--danger);
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 13px;
+      line-height: 1.45;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+      opacity: 0;
+      transform: translateY(12px);
+      transition: opacity 0.22s ease, transform 0.22s ease;
+      pointer-events: auto;
+    }
+
+    .toast.is-visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .toast-drone {
+      color: var(--blue);
+      font-weight: 700;
+      margin-right: 8px;
+    }
+
+    .toast-text {
+      color: var(--text);
+    }
+
+    /* ── Map marker hover preview (detection tooltip) ── */
+    .det-preview-tooltip {
+      background: rgba(20, 26, 40, 0.97);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6);
+      opacity: 1 !important;
+    }
+
+    .det-preview-tooltip::before {
+      display: none;
+    }
+
+    /* hide Leaflet's arrow */
+    .det-tip-img {
+      display: block;
+      width: 220px;
+      height: 124px;
+      object-fit: cover;
+      border-radius: 3px;
+      margin-bottom: 5px;
+      background: #060810;
+    }
+
+    .det-tip-prompt {
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .det-tip-drone {
+      color: var(--blue);
+      font-size: 11px;
+      margin-top: 2px;
+    }
+
+    /* ── Register button ── */
+    #btn-register {
+      width: 100%;
+      margin-bottom: 10px;
+      background: transparent;
+      color: var(--muted);
+      border: 1px dashed var(--border);
+      border-radius: 5px;
+      padding: 6px 10px;
+      font-size: 11px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: color 0.15s, border-color 0.15s;
+      letter-spacing: 0.03em;
+    }
+
+    #btn-register:hover {
+      color: var(--accent);
+      border-color: var(--accent);
+      border-style: solid;
+    }
+
+    /* ── Drones section body ── */
+    #drones-body {
+      padding: 10px 10px 14px;
+      max-height: calc(100vh - 230px);
+      overflow-y: auto;
+    }
+
+    /* ── Camera grid: 2 columns ── */
+    .empty {
+      padding: 4px 0 2px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .drone-cameras {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 7px;
+    }
+
+    .cam-tile {
+      background: #060810;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      aspect-ratio: 16/9;
+      position: relative;
+      cursor: pointer;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+
+    .cam-tile:hover {
+      border-color: rgba(59, 130, 246, 0.45);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    }
+
+    .cam-tile:hover .cam-expand,
+    .cam-tile:hover .cam-delete {
+      opacity: 1;
+    }
+
+    .cam-tile img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .cam-label {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 12px 6px 4px;
+      background: linear-gradient(transparent, rgba(0, 0, 0, 0.88));
+      font-size: 9px;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .cam-name {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      letter-spacing: 0.02em;
+    }
+
+    /* Status dot with pulse for online */
+    .cam-dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .cam-dot.online {
+      background: #3fb950;
+      box-shadow: 0 0 4px #3fb950;
+      animation: pulse-dot 2.5s ease-in-out infinite;
+    }
+
+    .cam-dot.offline {
+      background: var(--danger);
+    }
+
+    @keyframes pulse-dot {
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0.35;
+      }
+    }
+
+    /* Expand icon */
+    .cam-expand {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      background: rgba(0, 0, 0, 0.7);
+      color: var(--text);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 3px;
+      padding: 1px 4px;
+      font-size: 9px;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.15s;
+      text-decoration: none;
+      line-height: 1.7;
+      backdrop-filter: blur(4px);
+    }
+
+    .cam-no-signal {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted-2);
+      font-size: 9px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    /* Delete button */
+    .cam-delete {
+      position: absolute;
+      top: 4px;
+      left: 4px;
+      background: rgba(248, 81, 73, 0.9);
+      color: #fff;
+      border: none;
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-size: 9px;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.15s;
+      line-height: 1.7;
+      font-family: inherit;
+    }
+
+    /* ── Pathing section ── */
+    .stripe-dir {
+      display: flex;
+      gap: 5px;
+      margin-top: 7px;
+    }
+
+    .stripe-dir button {
+      flex: 1;
+      background: var(--panel-2);
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 5px 6px;
+      font-size: 11px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: border-color 0.13s, color 0.13s;
+    }
+
+    .stripe-dir button:hover {
+      border-color: var(--muted-2);
+      color: var(--text);
+    }
+
+    .stripe-dir button.active {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: rgba(59, 130, 246, 0.08);
+    }
+
+    .path-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      margin: 5px 0;
+      color: var(--muted);
+    }
+
+    .path-row span:last-child {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--text);
+    }
+
+    .path-hint {
+      font-size: 10px;
+      color: var(--muted-2);
+      line-height: 1.55;
+      margin-top: 8px;
+      border-top: 1px solid var(--border-s);
+      padding-top: 8px;
+    }
+
+    /* ── Leaflet ── */
+    /* Drone label tooltip — background goes through the theme tokens so the text color
+     (var(--text)) always contrasts. Previously the background was a hardcoded dark
+     navy which kept working in dark mode but collapsed to dark-text-on-dark in light
+     mode (drone names appeared gray/unreadable once a drone came online). */
+    .leaflet-tooltip.drone-label {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-size: 10px;
+      padding: 2px 7px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+      border-radius: 4px;
+      font-weight: 600;
+    }
+
+    .leaflet-tooltip.drone-label::before {
+      display: none;
+    }
+
+    /* ── Dialogs ── */
+    .hidden {
+      display: none !important;
+    }
+
+    dialog#add-dialog {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px 22px;
+      min-width: 310px;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+    }
+
+    dialog#add-dialog::backdrop {
+      background: rgba(0, 0, 0, 0.65);
+    }
+
+    dialog#add-dialog h3 {
+      margin: 0 0 14px;
+      font-size: 10px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    dialog#add-dialog .field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-bottom: 11px;
+      font-size: 12px;
+    }
+
+    dialog#add-dialog label {
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: 0.03em;
+    }
+
+    dialog#add-dialog input {
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 7px 9px;
+      font-family: inherit;
+      font-size: 12px;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+
+    dialog#add-dialog input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+    }
+
+    dialog#add-dialog .actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 7px;
+      margin-top: 12px;
+    }
+
+    dialog#add-dialog .error {
+      color: var(--danger);
+      font-size: 10px;
+      min-height: 14px;
+    }
+
+    dialog button {
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 7px 14px;
+      font-size: 12px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.13s, border-color 0.13s;
+    }
+
+    dialog button:hover {
+      background: var(--panel-3);
+      border-color: var(--muted-2);
+    }
+
+    dialog button.primary {
+      background: var(--accent);
+      color: #fff;
+      border-color: transparent;
+      box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+    }
+
+    dialog button.primary:hover {
+      background: var(--accent-h);
+      box-shadow: 0 4px 14px rgba(59, 130, 246, 0.45);
+    }
+
+    .hint {
+      font-size: 10px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    /* ── Place panel ── */
+    .place-panel {
+      position: fixed;
+      bottom: 24px;
+      left: calc(clamp(280px, 33vw, 400px) + (100vw - clamp(280px, 33vw, 400px)) / 2);
+      transform: translateX(-50%);
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px 12px;
+      min-width: 300px;
+      max-width: 390px;
+      z-index: 2000;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+      font-size: 12px;
+    }
+
+    .place-panel .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      margin: 7px 0;
+    }
+
+    .place-panel .coords {
+      color: var(--muted);
+      font-size: 10px;
+      font-family: var(--mono);
+    }
+
+    .place-panel .actions {
+      display: flex;
+      gap: 7px;
+      margin-top: 12px;
+    }
+
+    .place-panel .actions button {
+      flex: 1;
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 6px 9px;
+      font-size: 11px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.13s, border-color 0.13s;
+    }
+
+    .place-panel .actions button:hover {
+      background: var(--panel-3);
+      border-color: var(--muted-2);
+    }
+
+    .place-panel .actions button.primary {
+      background: var(--accent);
+      color: #fff;
+      border-color: transparent;
+      box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+    }
+
+    .place-panel .actions button.primary:hover {
+      background: var(--accent-h);
+    }
+
+    .place-panel .err {
+      color: var(--danger);
+      font-size: 10px;
+      min-height: 14px;
+      margin-top: 5px;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+    }
+  </style>
 </head>
+
 <body>
-<div id="app">
+  <div id="app">
 
-  <!-- ── Sidebar (1/3) ── -->
-  <aside id="side">
-    <header>
-      <div class="brand-row">
-        <img src="/static/argus_icon.png" class="brand-logo" alt="ARGUS">
-        <div>
-          <div class="brand-name">ARGUS</div>
-          <div class="brand-sub">Multi-Drone Operations</div>
+    <!-- ── Sidebar (1/3) ── -->
+    <aside id="side">
+      <header>
+        <div class="brand-row">
+          <img src="/static/argus_icon.png" class="brand-logo" alt="ARGUS">
+          <div>
+            <div class="brand-name">ARGUS</div>
+            <div class="brand-sub">Multi-Drone Operations</div>
+          </div>
+          <div class="brand-spacer"></div>
+          <button id="theme-toggle" type="button" aria-label="Toggle theme" title="Toggle light/dark theme">☾</button>
         </div>
-      </div>
-    </header>
+      </header>
 
-    <div id="side-body">
+      <div id="side-body">
 
-      <!-- Search prompt -->
-      <div class="section section--static">
-        <div class="section-head"><h2>Search Target</h2></div>
-        <div class="section-body">
-          <textarea id="prompt-textarea" rows="3" placeholder="Describe what the swarm should search for…"></textarea>
-          <button id="btn-dispatch">Dispatch to swarm</button>
-        </div>
-      </div>
-
-      <!-- Notifications (collapsible, collapsed by default) -->
-      <div class="section">
-        <div class="section-head is-collapsed" id="notif-toggle">
-          <h2>Detections <span class="notif-badge" id="notif-badge"></span></h2>
-          <div style="display:flex; align-items:center; gap:4px;">
-            <button id="notif-expand" class="notif-expand" title="Expand detections view">⛶</button>
-            <span class="chevron">▾</span>
+        <!-- Search prompt -->
+        <div class="section section--static">
+          <div class="section-head">
+            <h2>Search Target</h2>
+          </div>
+          <div class="section-body">
+            <textarea id="prompt-textarea" rows="3" placeholder="Describe what the swarm should search for…"></textarea>
+            <button id="btn-dispatch">Dispatch to swarm</button>
           </div>
         </div>
-        <div class="section-body is-hidden" id="notif-body">
-          <p class="notif-empty" id="notif-empty">No detections yet.</p>
-          <ol class="notif-list" id="notif-list"></ol>
+
+        <!-- Notifications (collapsible, collapsed by default) -->
+        <div class="section">
+          <div class="section-head is-collapsed" id="notif-toggle">
+            <h2>Detections <span class="notif-badge" id="notif-badge"></span></h2>
+            <div style="display:flex; align-items:center; gap:4px;">
+              <button id="notif-expand" class="notif-expand" title="Expand detections view">⛶</button>
+              <span class="chevron">▾</span>
+            </div>
+          </div>
+          <div class="section-body is-hidden" id="notif-body">
+            <p class="notif-empty" id="notif-empty">No detections yet.</p>
+            <ol class="notif-list" id="notif-list"></ol>
+          </div>
+        </div>
+
+
+
+        <!-- Drones (collapsible, expanded by default) -->
+        <div class="section">
+          <div class="section-head" id="drones-toggle">
+            <h2>Drones <span id="drone-count" style="color:var(--text);font-weight:700;">0</span></h2>
+            <span class="chevron">▾</span>
+          </div>
+          <div id="drones-body">
+
+            <div id="drone-cameras" class="drone-cameras"></div>
+            <div id="drone-empty" class="empty hidden">No drones registered.</div>
+          </div>
+        </div>
+
+      </div>
+    </aside>
+
+    <!-- ── Map (2/3) — wraps both the 2D Leaflet view and the 3D MapLibre view so the
+       same grid cell hosts whichever one is currently active. ── -->
+    <div class="map-container">
+      <div id="map"></div>
+      <div id="map3d" class="is-hidden"></div>
+      <div class="map-mode-toggle" role="group" aria-label="Map mode">
+        <button id="map-mode-2d" class="is-active" type="button">2D</button>
+        <button id="map-mode-3d" type="button">3D</button>
+      </div>
+    </div>
+
+    <!-- ── Transient toasts (bottom-right) ── -->
+    <div id="toast-stack" aria-live="polite" aria-atomic="false"></div>
+
+    <!-- ── Fullscreen lightbox (shared: detection frames + live streams) ── -->
+    <div id="lightbox" role="dialog" aria-modal="true" aria-hidden="true">
+      <button id="lightbox-close" type="button" aria-label="Close (Esc)">Close ✕</button>
+      <div class="lightbox-inner">
+        <img id="lightbox-img" alt="">
+        <div id="lightbox-caption"></div>
+        <!-- Shown only when the lightbox was opened for a detection (not a live stream). -->
+        <div id="lightbox-desc" class="desc-block" style="display:none;">
+          <label>
+            <input type="checkbox" id="lightbox-desc-check">
+            <span>Description (Gemini)</span>
+          </label>
+          <div id="lightbox-desc-result" class="desc-result"></div>
         </div>
       </div>
+    </div>
 
-      
-
-      <!-- Drones (collapsible, expanded by default) -->
-      <div class="section">
-        <div class="section-head" id="drones-toggle">
-          <h2>Drones <span id="drone-count" style="color:var(--text);font-weight:700;">0</span></h2>
-          <span class="chevron">▾</span>
-        </div>
-        <div id="drones-body">
-          
-          <div id="drone-cameras" class="drone-cameras"></div>
-          <div id="drone-empty" class="empty hidden">No drones registered.</div>
-        </div>
+    <!-- ── Expanded detections panel (takes the map slot when open) ── -->
+    <section id="detections-panel">
+      <header class="det-panel-head">
+        <h2>Detections <span class="count" id="det-count">0</span></h2>
+        <button id="det-close" class="det-close">Close ✕</button>
+      </header>
+      <div class="det-panel-body" id="det-body">
+        <div class="det-empty" id="det-empty">No detections yet.</div>
       </div>
+    </section>
+  </div>
 
+  <!-- ── Register drone dialog ── -->
+  <dialog id="add-dialog">
+    <h3>Register drone</h3>
+    <div class="field">
+      <label for="reg-id">ID (letters, digits, - _)</label>
+      <input id="reg-id" type="text" autocomplete="off" maxlength="40">
     </div>
-  </aside>
-
-  <!-- ── Map (2/3) ── -->
-  <div id="map"></div>
-
-  <!-- ── Transient toasts (bottom-right) ── -->
-  <div id="toast-stack" aria-live="polite" aria-atomic="false"></div>
-
-  <!-- ── Fullscreen lightbox (shared: detection frames + live streams) ── -->
-  <div id="lightbox" role="dialog" aria-modal="true" aria-hidden="true">
-    <button id="lightbox-close" type="button" aria-label="Close (Esc)">Close ✕</button>
-    <div class="lightbox-inner">
-      <img id="lightbox-img" alt="">
-      <div id="lightbox-caption"></div>
+    <div class="field">
+      <label for="reg-label">Label (optional)</label>
+      <input id="reg-label" type="text" autocomplete="off" maxlength="60">
     </div>
-  </div>
-
-  <!-- ── Expanded detections panel (takes the map slot when open) ── -->
-  <section id="detections-panel">
-    <header class="det-panel-head">
-      <h2>Detections <span class="count" id="det-count">0</span></h2>
-      <button id="det-close" class="det-close">Close ✕</button>
-    </header>
-    <div class="det-panel-body" id="det-body">
-      <div class="det-empty" id="det-empty">No detections yet.</div>
+    <div class="field" style="flex-direction:row;align-items:center;gap:8px;">
+      <input id="reg-mock" type="checkbox">
+      <label for="reg-mock" style="margin:0;">Mock drone (no real RC)</label>
     </div>
-  </section>
-</div>
+    <div class="field">
+      <label for="reg-ip">RC IP address (not needed for mock)</label>
+      <input id="reg-ip" type="text" autocomplete="off" placeholder="192.168.1.100">
+    </div>
+    <p class="hint" style="margin:0 0 6px;">After clicking <b>Pick location</b>, click the map to place this drone.</p>
+    <div class="error" id="reg-error"></div>
+    <div class="actions">
+      <button id="reg-cancel">Cancel</button>
+      <button id="reg-save" class="primary">Pick location on map →</button>
+    </div>
+  </dialog>
 
-<!-- ── Register drone dialog ── -->
-<dialog id="add-dialog">
-  <h3>Register drone</h3>
-  <div class="field">
-    <label for="reg-id">ID (letters, digits, - _)</label>
-    <input id="reg-id" type="text" autocomplete="off" maxlength="40">
+  <!-- ── Placement preview panel ── -->
+  <div id="place-panel" class="place-panel hidden">
+    <div class="row">
+      <span style="font-weight:600;" id="place-id">—</span>
+      <span class="coords" id="place-coords">—</span>
+    </div>
+    <div class="row"><span>Coverage radius</span><span><span id="place-reach-val">100</span> m</span></div>
+    <input type="range" id="place-reach" min="10" max="1000" step="10" value="100">
+    <div class="actions">
+      <button id="place-cancel">Cancel</button>
+      <button id="place-confirm" class="primary">Register drone</button>
+    </div>
+    <div class="err" id="place-err"></div>
   </div>
-  <div class="field">
-    <label for="reg-label">Label (optional)</label>
-    <input id="reg-label" type="text" autocomplete="off" maxlength="60">
-  </div>
-  <div class="field" style="flex-direction:row;align-items:center;gap:8px;">
-    <input id="reg-mock" type="checkbox">
-    <label for="reg-mock" style="margin:0;">Mock drone (no real RC)</label>
-  </div>
-  <div class="field">
-    <label for="reg-ip">RC IP address (not needed for mock)</label>
-    <input id="reg-ip" type="text" autocomplete="off" placeholder="192.168.1.100">
-  </div>
-  <p class="hint" style="margin:0 0 6px;">After clicking <b>Pick location</b>, click the map to place this drone.</p>
-  <div class="error" id="reg-error"></div>
-  <div class="actions">
-    <button id="reg-cancel">Cancel</button>
-    <button id="reg-save" class="primary">Pick location on map →</button>
-  </div>
-</dialog>
 
-<!-- ── Placement preview panel ── -->
-<div id="place-panel" class="place-panel hidden">
-  <div class="row">
-    <span style="font-weight:600;" id="place-id">—</span>
-    <span class="coords" id="place-coords">—</span>
-  </div>
-  <div class="row"><span>Coverage radius</span><span><span id="place-reach-val">100</span> m</span></div>
-  <input type="range" id="place-reach" min="10" max="1000" step="10" value="100">
-  <div class="actions">
-    <button id="place-cancel">Cancel</button>
-    <button id="place-confirm" class="primary">Register drone</button>
-  </div>
-  <div class="err" id="place-err"></div>
-</div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script>
+    'use strict';
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script>
-'use strict';
+    const DEFAULT_CENTER = [46.0569, 14.5058];
+    const PALETTE = ['#3fb950', '#58a6ff', '#f778ba', '#d29922', '#a371f7', '#ff7b72', '#39c5cf', '#e3b341', '#bc8cff', '#56d364'];
 
-const DEFAULT_CENTER = [46.0569, 14.5058];
-const PALETTE = ['#3fb950','#58a6ff','#f778ba','#d29922','#a371f7','#ff7b72','#39c5cf','#e3b341','#bc8cff','#56d364'];
+    // ── Map ───────────────────────────────────────────────────────────────────
+    const map = L.map('map', { zoomControl: true, preferCanvas: true }).setView(DEFAULT_CENTER, 14);
+    map.createPane('pathPane');
+    map.getPane('pathPane').style.zIndex = 450;
 
-// ── Map ───────────────────────────────────────────────────────────────────
-const map = L.map('map', { zoomControl: true, preferCanvas: true }).setView(DEFAULT_CENTER, 14);
-map.createPane('pathPane');
-map.getPane('pathPane').style.zIndex = 450;
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      attribution: '© OpenStreetMap © CARTO', maxZoom: 19
+    }).addTo(map);
 
-L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-  attribution: '© OpenStreetMap © CARTO', maxZoom: 19
-}).addTo(map);
+    const pathLayer = L.layerGroup().addTo(map);
 
-const pathLayer = L.layerGroup().addTo(map);
-
-map.on('click', (e) => {
-  if (e.originalEvent.target.closest('.leaflet-marker-icon')) return;
-  if (typeof window.__argusPlaceClick === 'function') window.__argusPlaceClick(e.latlng);
-});
-
-// ── Drone state ───────────────────────────────────────────────────────────
-// liveByBackendId: backendId → { marker, sourceId, label, online, color, lat, lng, reach }
-const liveByBackendId = new Map();
-
-// ── Path planning ─────────────────────────────────────────────────────────
-
-
-function addLiveDrone(s, lat, lng) {
-  const idx = liveByBackendId.size;
-  const color = PALETTE[idx % PALETTE.length];
-  const marker = L.circleMarker([lat, lng], { radius: 8, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 }).addTo(map);
-  marker.bindTooltip(s.label || s.id, { permanent: true, direction: 'top', offset: [0, -6], className: 'drone-label' });
-  const entry = { marker, sourceId: s.id, label: s.label || s.id, online: !!s.online, color, lat, lng, reach: s.reach_m || 100 };
-  liveByBackendId.set(s.id, entry);
-  return entry;
-}
-
-function reconcileLive(snapshots) {
-  const seen = new Set();
-  for (const s of snapshots) {
-    seen.add(s.id);
-    const lat = s.lat ?? s.home_lat;
-    const lng = s.lng ?? s.home_lng;
-    if (lat == null || lng == null) continue;
-    const existing = liveByBackendId.get(s.id);
-    if (!existing) {
-      addLiveDrone(s, lat, lng);
-    } else {
-      existing.lat = lat; existing.lng = lng;
-      existing.label = s.label || s.id;
-      existing.online = !!s.online;
-      if (s.reach_m) { existing.reach = s.reach_m; }
-      existing.marker.setLatLng([lat, lng]);
-      existing.marker.setTooltipContent(s.label || s.id);
-      // Connect our native backend path rendering to the new UI loop
-      if (s.path && s.path.length > 0) {
-          const pts = s.path.map(p => [(p.lat || p.latitude), (p.lon || p.longitude)]);
-          if (existing.pathLine) {
-              existing.pathLine.setLatLngs(pts);
-          } else {
-              existing.pathLine = L.polyline(pts, {pane: 'pathPane', color: existing.color, weight: 2, dashArray: '5,5'}).addTo(pathLayer);
-          }
-      } else if (existing.pathLine) {
-          map.removeLayer(existing.pathLine);
-          existing.pathLine = null;
-      }
-
-    }
-  }
-  // Remove gone drones
-  for (const [id, d] of liveByBackendId) {
-    if (!seen.has(id)) {
-      map.removeLayer(d.marker);
-      liveByBackendId.delete(id);
-      if (d.pathLine) map.removeLayer(d.pathLine);
-    }
-  }
-  renderList();
-  schedulePathUpdate();
-}
-
-// ── Delete drone ──────────────────────────────────────────────────────────
-async function deleteDrone(sourceId) {
-  try {
-    const res = await fetch(`/api/drones/${encodeURIComponent(sourceId)}`, { method: 'DELETE' });
-    if (!res.ok && res.status !== 404) throw new Error(res.status);
-    fetchAndRender();
-  } catch (e) {
-    console.warn('Delete failed:', e.message);
-  }
-}
-
-// ── Drone grid (cameras are the list) ────────────────────────────────────
-function renderList() {
-  const grid = document.getElementById('drone-cameras');
-  const emptyEl = document.getElementById('drone-empty');
-  const count = liveByBackendId.size;
-  document.getElementById('drone-count').textContent = count;
-
-  const sectionHidden = document.getElementById('drones-body').classList.contains('is-hidden');
-
-  if (count === 0) {
-    stopCameras();
-    emptyEl.classList.remove('hidden');
-    return;
-  }
-  emptyEl.classList.add('hidden');
-
-  if (sectionHidden) { stopCameras(); return; }
-
-  // Reconcile tiles: add new, remove gone
-  const existing = new Map();
-  for (const tile of grid.querySelectorAll('.cam-tile')) existing.set(tile.dataset.sid, tile);
-
-  const seen = new Set();
-  for (const [, d] of liveByBackendId) {
-    seen.add(d.sourceId);
-    if (existing.has(d.sourceId)) {
-      // Update status dot
-      const dot = existing.get(d.sourceId).querySelector('.cam-dot');
-      if (dot) { dot.className = 'cam-dot ' + (d.online ? 'online' : 'offline'); }
-      continue;
-    }
-
-    const tile = document.createElement('div');
-    tile.className = 'cam-tile';
-    tile.dataset.sid = d.sourceId;
-    tile.title = d.label;
-    tile.style.cursor = 'pointer';
-    tile.addEventListener('click', () => map.panTo([d.lat, d.lng]));
-
-    const img = document.createElement('img');
-    img.src = `/api/swarm/${encodeURIComponent(d.sourceId)}/video.mjpg?t=${Date.now()}`;
-    img.alt = d.label;
-    img.onerror = () => {
-      img.style.display = 'none';
-      if (!tile.querySelector('.cam-no-signal')) {
-        const ns = document.createElement('div');
-        ns.className = 'cam-no-signal';
-        ns.textContent = 'no signal';
-        tile.insertBefore(ns, tile.firstChild);
-      }
-    };
-    tile.appendChild(img);
-
-    // Delete button (top-left)
-    const del = document.createElement('button');
-    del.className = 'cam-delete';
-    del.textContent = '✕';
-    del.title = 'Remove drone';
-    del.addEventListener('click', (e) => { e.stopPropagation(); deleteDrone(d.sourceId); });
-    tile.appendChild(del);
-
-    // Expand → open this drone's live stream full-screen in the lightbox.
-    const exp = document.createElement('button');
-    exp.type = 'button';
-    exp.className = 'cam-expand';
-    exp.title = 'Expand live feed';
-    exp.textContent = '⛶';
-    exp.addEventListener('click', (e) => {
-      e.stopPropagation();
-      openLightbox(
-        `/api/swarm/${encodeURIComponent(d.sourceId)}/video.mjpg?t=${Date.now()}`,
-        `Live — ${d.label}`
-      );
+    map.on('click', (e) => {
+      if (e.originalEvent.target.closest('.leaflet-marker-icon')) return;
+      if (typeof window.__argusPlaceClick === 'function') window.__argusPlaceClick(e.latlng);
     });
-    tile.appendChild(exp);
 
-    const lbl = document.createElement('div');
-    lbl.className = 'cam-label';
-    lbl.innerHTML = `<span class="cam-dot ${d.online ? 'online' : 'offline'}"></span><span class="cam-name">${esc(d.label)}</span>`;
-    tile.appendChild(lbl);
+    // ── Drone state ───────────────────────────────────────────────────────────
+    // liveByBackendId: backendId → { marker, sourceId, label, online, color, lat, lng, reach }
+    const liveByBackendId = new Map();
 
-    grid.appendChild(tile);
-  }
+    // ── Path planning ─────────────────────────────────────────────────────────
 
-  for (const [sid, tile] of existing) {
-    if (!seen.has(sid)) {
-      const img = tile.querySelector('img');
-      if (img) img.src = '';
-      grid.removeChild(tile);
+
+    function addLiveDrone(s, lat, lng) {
+      const idx = liveByBackendId.size;
+      const color = PALETTE[idx % PALETTE.length];
+      const marker = L.circleMarker([lat, lng], { radius: 8, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 }).addTo(map);
+      marker.bindTooltip(s.label || s.id, { permanent: true, direction: 'top', offset: [0, -6], className: 'drone-label' });
+      const entry = { marker, sourceId: s.id, label: s.label || s.id, online: !!s.online, color, lat, lng, reach: s.reach_m || 100 };
+      liveByBackendId.set(s.id, entry);
+      return entry;
     }
-  }
-}
 
-function stopCameras() {
-  const grid = document.getElementById('drone-cameras');
-  for (const img of grid.querySelectorAll('img')) img.src = '';
-  grid.innerHTML = '';
-}
+    function reconcileLive(snapshots) {
+      const seen = new Set();
+      for (const s of snapshots) {
+        seen.add(s.id);
+        const lat = s.lat ?? s.home_lat;
+        const lng = s.lng ?? s.home_lng;
+        if (lat == null || lng == null) continue;
+        const existing = liveByBackendId.get(s.id);
+        if (!existing) {
+          addLiveDrone(s, lat, lng);
+        } else {
+          existing.lat = lat; existing.lng = lng;
+          existing.label = s.label || s.id;
+          existing.online = !!s.online;
+          existing.path = s.path || [];
+          if (s.reach_m) { existing.reach = s.reach_m; }
+          existing.marker.setLatLng([lat, lng]);
+          existing.marker.setTooltipContent(s.label || s.id);
+          // Connect our native backend path rendering to the new UI loop
+          if (s.path && s.path.length > 0) {
+            const pts = s.path.map(p => [(p.lat || p.latitude), (p.lon || p.longitude)]);
+            if (existing.pathLine) {
+              existing.pathLine.setLatLngs(pts);
+            } else {
+              existing.pathLine = L.polyline(pts, { pane: 'pathPane', color: existing.color, weight: 2, dashArray: '5,5' }).addTo(pathLayer);
+            }
+          } else if (existing.pathLine) {
+            map.removeLayer(existing.pathLine);
+            existing.pathLine = null;
+          }
 
-// renderCameras is now just renderList — keep alias for toggle handler
-function renderCameras() { renderList(); }
+        }
+      }
+      // Remove gone drones
+      for (const [id, d] of liveByBackendId) {
+        if (!seen.has(id)) {
+          map.removeLayer(d.marker);
+          liveByBackendId.delete(id);
+          if (d.pathLine) map.removeLayer(d.pathLine);
+        }
+      }
+      renderList();
+      schedulePathUpdate();
+    }
 
-// ── Collapsible sections ──────────────────────────────────────────────────
-function initToggle(toggleId, bodyId, onOpen) {
-  const toggle = document.getElementById(toggleId);
-  const body = document.getElementById(bodyId);
-  toggle.addEventListener('click', () => {
-    const nowHidden = body.classList.toggle('is-hidden');
-    toggle.classList.toggle('is-collapsed', nowHidden);
-    if (!nowHidden && onOpen) onOpen();
-    if (nowHidden && bodyId === 'drones-body') stopCameras();
-  });
-}
+    // ── Delete drone ──────────────────────────────────────────────────────────
+    async function deleteDrone(sourceId) {
+      try {
+        const res = await fetch(`/api/drones/${encodeURIComponent(sourceId)}`, { method: 'DELETE' });
+        if (!res.ok && res.status !== 404) throw new Error(res.status);
+        fetchAndRender();
+      } catch (e) {
+        console.warn('Delete failed:', e.message);
+      }
+    }
 
-initToggle('notif-toggle', 'notif-body', () => {
-  document.getElementById('notif-badge').textContent = '';
-});
+    // ── Drone grid (cameras are the list) ────────────────────────────────────
+    function renderList() {
+      const grid = document.getElementById('drone-cameras');
+      const emptyEl = document.getElementById('drone-empty');
+      const count = liveByBackendId.size;
+      document.getElementById('drone-count').textContent = count;
 
-initToggle('drones-toggle', 'drones-body', renderCameras);
+      const sectionHidden = document.getElementById('drones-body').classList.contains('is-hidden');
 
-// ── Detections ───────────────────────────────────────────────────────────
-let unread = 0;
-const detectionsById = new Map();     // det.id → det (metadata only, client cache)
-const detectionMarkers = new Map();   // det.id → L.circleMarker (pins on the map)
-// Auto-pin is the default. `unpinnedIds` tracks detections the operator
-// explicitly unpinned in this session so that re-bootstraps (polling fallback,
-// panel open) don't resurrect them. In-memory only — cleared on page refresh.
-const unpinnedIds = new Set();
+      if (count === 0) {
+        stopCameras();
+        emptyEl.classList.remove('hidden');
+        return;
+      }
+      emptyEl.classList.add('hidden');
 
-// Dedicated pane so detection pins sit above paths.
-map.createPane('detectionsPane');
-map.getPane('detectionsPane').style.zIndex = 500;
+      if (sectionHidden) { stopCameras(); return; }
 
-function fmtTime(tsMs) {
-  const d = new Date(tsMs);
-  return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
+      // Reconcile tiles: add new, remove gone
+      const existing = new Map();
+      for (const tile of grid.querySelectorAll('.cam-tile')) existing.set(tile.dataset.sid, tile);
 
-function showToast(det) {
-  const stack = document.getElementById('toast-stack');
-  if (!stack) return;
-  const el = document.createElement('div');
-  el.className = 'toast';
-  el.innerHTML =
-    `<span class="toast-drone">${esc(det.droneLabel || det.droneId)}</span>` +
-    `<span class="toast-text">${esc(det.prompt)}</span>`;
-  stack.appendChild(el);
-  requestAnimationFrame(() => el.classList.add('is-visible'));
-  setTimeout(() => {
-    el.classList.remove('is-visible');
-    setTimeout(() => el.remove(), 260);
-  }, 2000);
-}
+      const seen = new Set();
+      for (const [, d] of liveByBackendId) {
+        seen.add(d.sourceId);
+        if (existing.has(d.sourceId)) {
+          // Update status dot
+          const dot = existing.get(d.sourceId).querySelector('.cam-dot');
+          if (dot) { dot.className = 'cam-dot ' + (d.online ? 'online' : 'offline'); }
+          continue;
+        }
 
-function addDetection(det, opts) {
-  if (!det || !det.id || detectionsById.has(det.id)) return;
-  detectionsById.set(det.id, det);
-  if (!opts || !opts.silent) showToast(det);
+        const tile = document.createElement('div');
+        tile.className = 'cam-tile';
+        tile.dataset.sid = d.sourceId;
+        tile.title = d.label;
+        tile.style.cursor = 'pointer';
+        tile.addEventListener('click', () => map.panTo([d.lat, d.lng]));
 
-  // Compact list row.
-  const empty = document.getElementById('notif-empty');
-  if (empty) empty.remove();
+        const img = document.createElement('img');
+        img.src = `/api/swarm/${encodeURIComponent(d.sourceId)}/video.mjpg?t=${Date.now()}`;
+        img.alt = d.label;
+        img.onerror = () => {
+          img.style.display = 'none';
+          if (!tile.querySelector('.cam-no-signal')) {
+            const ns = document.createElement('div');
+            ns.className = 'cam-no-signal';
+            ns.textContent = 'no signal';
+            tile.insertBefore(ns, tile.firstChild);
+          }
+        };
+        tile.appendChild(img);
 
-  const badge = document.getElementById('notif-badge');
-  const list = document.getElementById('notif-list');
-  const notifBody = document.getElementById('notif-body');
+        // Delete button (top-left)
+        const del = document.createElement('button');
+        del.className = 'cam-delete';
+        del.textContent = '✕';
+        del.title = 'Remove drone';
+        del.addEventListener('click', (e) => { e.stopPropagation(); deleteDrone(d.sourceId); });
+        tile.appendChild(del);
 
-  const li = document.createElement('li');
-  li.className = 'notif-item is-alert';
-  li.dataset.detId = det.id;
-  const label = det.droneLabel || det.droneId;
-  li.innerHTML = `<span class="notif-ts">${fmtTime(det.ts)}</span><span class="notif-drone">${esc(label)}</span><span class="notif-text">${esc(det.prompt)}</span>`;
-  list.insertBefore(li, list.firstChild);
-  while (list.children.length > 50) list.removeChild(list.lastChild);
+        // Expand → open this drone's live stream full-screen in the lightbox.
+        const exp = document.createElement('button');
+        exp.type = 'button';
+        exp.className = 'cam-expand';
+        exp.title = 'Expand live feed';
+        exp.textContent = '⛶';
+        exp.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openLightbox(
+            `/api/swarm/${encodeURIComponent(d.sourceId)}/video.mjpg?t=${Date.now()}`,
+            `Live — ${d.label}`
+          );
+        });
+        tile.appendChild(exp);
 
-  if (notifBody.classList.contains('is-hidden')) {
-    unread++;
-    badge.textContent = unread > 9 ? '9+' : String(unread);
-  }
+        const lbl = document.createElement('div');
+        lbl.className = 'cam-label';
+        lbl.innerHTML = `<span class="cam-dot ${d.online ? 'online' : 'offline'}"></span><span class="cam-name">${esc(d.label)}</span>`;
+        tile.appendChild(lbl);
 
-  // Append to the expanded panel if it's open.
-  if (document.getElementById('detections-panel').classList.contains('is-open')) {
-    prependDetCard(det);
-  }
-  // Auto-pin on the map unless the operator explicitly unpinned it earlier.
-  if (!unpinnedIds.has(det.id)) {
-    pinDetection(det);
-  }
-}
-window.argusAddDetection = addDetection;
+        grid.appendChild(tile);
+      }
 
-// Fetch server-side detection history and feed it through the same compact-list
-// path as WS alerts. Runs on page load and when the panel opens so the list
-// stays in sync even if the operator refreshes after detections already fired.
-async function bootstrapDetections() {
-  try {
-    const res = await fetch('/api/detections');
-    if (!res.ok) return;
-    const data = await res.json();
-    // Oldest first → newest ends up at the top of the list via prepends.
-    const sorted = (data.detections || []).slice().sort((a, b) => a.ts - b.ts);
-    for (const d of sorted) addDetection(d, { silent: true });
-  } catch (_) { /* ignore; WS will fill in */ }
-}
+      for (const [sid, tile] of existing) {
+        if (!seen.has(sid)) {
+          const img = tile.querySelector('img');
+          if (img) img.src = '';
+          grid.removeChild(tile);
+        }
+      }
+    }
 
-// ── Expanded panel ───────────────────────────────────────────────────────
-function renderDetectionsPanel() {
-  const body = document.getElementById('det-body');
-  const empty = document.getElementById('det-empty');
-  body.querySelectorAll('.det-card').forEach(c => c.remove());
+    function stopCameras() {
+      const grid = document.getElementById('drone-cameras');
+      for (const img of grid.querySelectorAll('img')) img.src = '';
+      grid.innerHTML = '';
+    }
 
-  const all = Array.from(detectionsById.values()).sort((a, b) => b.ts - a.ts);
-  document.getElementById('det-count').textContent = all.length;
-  if (all.length === 0) { empty.style.display = ''; return; }
-  empty.style.display = 'none';
+    // renderCameras is now just renderList — keep alias for toggle handler
+    function renderCameras() { renderList(); }
 
-  for (const det of all) body.appendChild(buildDetCard(det));
-}
+    // ── Collapsible sections ──────────────────────────────────────────────────
+    function initToggle(toggleId, bodyId, onOpen) {
+      const toggle = document.getElementById(toggleId);
+      const body = document.getElementById(bodyId);
+      toggle.addEventListener('click', () => {
+        const nowHidden = body.classList.toggle('is-hidden');
+        toggle.classList.toggle('is-collapsed', nowHidden);
+        if (!nowHidden && onOpen) onOpen();
+        if (nowHidden && bodyId === 'drones-body') stopCameras();
+      });
+    }
 
-function prependDetCard(det) {
-  const body = document.getElementById('det-body');
-  const empty = document.getElementById('det-empty');
-  empty.style.display = 'none';
-  body.insertBefore(buildDetCard(det), body.children[1] || null);
-  document.getElementById('det-count').textContent = detectionsById.size;
-}
+    initToggle('notif-toggle', 'notif-body', () => {
+      document.getElementById('notif-badge').textContent = '';
+    });
 
-function buildDetCard(det) {
-  const card = document.createElement('article');
-  card.className = 'det-card';
-  card.dataset.detId = det.id;
+    initToggle('drones-toggle', 'drones-body', renderCameras);
 
-  const head = document.createElement('div');
-  head.className = 'det-card-head';
-  head.innerHTML = `
+    // ── Detections ───────────────────────────────────────────────────────────
+    let unread = 0;
+    const detectionsById = new Map();     // det.id → det (metadata only, client cache)
+    const detectionMarkers = new Map();   // det.id → L.circleMarker (pins on the map)
+    // Auto-pin is the default. `unpinnedIds` tracks detections the operator
+    // explicitly unpinned in this session so that re-bootstraps (polling fallback,
+    // panel open) don't resurrect them. In-memory only — cleared on page refresh.
+    const unpinnedIds = new Set();
+
+    // Dedicated pane so detection pins sit above paths.
+    map.createPane('detectionsPane');
+    map.getPane('detectionsPane').style.zIndex = 500;
+
+    function fmtTime(tsMs) {
+      const d = new Date(tsMs);
+      return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    function showToast(det) {
+      const stack = document.getElementById('toast-stack');
+      if (!stack) return;
+      const el = document.createElement('div');
+      el.className = 'toast';
+      el.innerHTML =
+        `<span class="toast-drone">${esc(det.droneLabel || det.droneId)}</span>` +
+        `<span class="toast-text">${esc(det.prompt)}</span>`;
+      stack.appendChild(el);
+      requestAnimationFrame(() => el.classList.add('is-visible'));
+      setTimeout(() => {
+        el.classList.remove('is-visible');
+        setTimeout(() => el.remove(), 260);
+      }, 2000);
+    }
+
+    function addDetection(det, opts) {
+      if (!det || !det.id || detectionsById.has(det.id)) return;
+      detectionsById.set(det.id, det);
+      if (!opts || !opts.silent) showToast(det);
+
+      // Compact list row.
+      const empty = document.getElementById('notif-empty');
+      if (empty) empty.remove();
+
+      const badge = document.getElementById('notif-badge');
+      const list = document.getElementById('notif-list');
+      const notifBody = document.getElementById('notif-body');
+
+      const li = document.createElement('li');
+      li.className = 'notif-item is-alert';
+      li.dataset.detId = det.id;
+      const label = det.droneLabel || det.droneId;
+      li.innerHTML = `<span class="notif-ts">${fmtTime(det.ts)}</span><span class="notif-drone">${esc(label)}</span><span class="notif-text">${esc(det.prompt)}</span>`;
+      list.insertBefore(li, list.firstChild);
+      while (list.children.length > 50) list.removeChild(list.lastChild);
+
+      if (notifBody.classList.contains('is-hidden')) {
+        unread++;
+        badge.textContent = unread > 9 ? '9+' : String(unread);
+      }
+
+      // Append to the expanded panel if it's open.
+      if (document.getElementById('detections-panel').classList.contains('is-open')) {
+        prependDetCard(det);
+      }
+      // Auto-pin on the map unless the operator explicitly unpinned it earlier.
+      if (!unpinnedIds.has(det.id)) {
+        pinDetection(det);
+      }
+    }
+    window.argusAddDetection = addDetection;
+
+    // Fetch server-side detection history and feed it through the same compact-list
+    // path as WS alerts. Runs on page load and when the panel opens so the list
+    // stays in sync even if the operator refreshes after detections already fired.
+    async function bootstrapDetections() {
+      try {
+        const res = await fetch('/api/detections');
+        if (!res.ok) return;
+        const data = await res.json();
+        // Oldest first → newest ends up at the top of the list via prepends.
+        const sorted = (data.detections || []).slice().sort((a, b) => a.ts - b.ts);
+        for (const d of sorted) addDetection(d, { silent: true });
+      } catch (_) { /* ignore; WS will fill in */ }
+    }
+
+    // ── Expanded panel ───────────────────────────────────────────────────────
+    function renderDetectionsPanel() {
+      const body = document.getElementById('det-body');
+      const empty = document.getElementById('det-empty');
+      body.querySelectorAll('.det-card').forEach(c => c.remove());
+
+      const all = Array.from(detectionsById.values()).sort((a, b) => b.ts - a.ts);
+      document.getElementById('det-count').textContent = all.length;
+      if (all.length === 0) { empty.style.display = ''; return; }
+      empty.style.display = 'none';
+
+      for (const det of all) body.appendChild(buildDetCard(det));
+    }
+
+    function prependDetCard(det) {
+      const body = document.getElementById('det-body');
+      const empty = document.getElementById('det-empty');
+      empty.style.display = 'none';
+      body.insertBefore(buildDetCard(det), body.children[1] || null);
+      document.getElementById('det-count').textContent = detectionsById.size;
+    }
+
+    function buildDetCard(det) {
+      const card = document.createElement('article');
+      card.className = 'det-card';
+      card.dataset.detId = det.id;
+
+      const head = document.createElement('div');
+      head.className = 'det-card-head';
+      head.innerHTML = `
     <span class="det-card-drone">${esc(det.droneLabel || det.droneId)}</span>
     <span class="det-card-prompt">${esc(det.prompt)}</span>
     <span class="det-card-ts">${fmtTime(det.ts)}</span>
   `;
-  card.appendChild(head);
+      card.appendChild(head);
 
-  const imgWrap = document.createElement('div');
-  imgWrap.className = 'det-card-image';
-  if (det.has_image) {
-    const img = document.createElement('img');
-    img.loading = 'lazy';
-    img.src = `/api/detections/${encodeURIComponent(det.id)}/image.jpg`;
-    img.alt = det.prompt;
-    img.onerror = () => { imgWrap.textContent = 'Image evicted'; };
-    imgWrap.appendChild(img);
-  } else {
-    imgWrap.textContent = 'Image evicted';
-  }
-  card.appendChild(imgWrap);
+      const imgWrap = document.createElement('div');
+      imgWrap.className = 'det-card-image';
+      if (det.has_image) {
+        const img = document.createElement('img');
+        img.loading = 'lazy';
+        img.src = `/api/detections/${encodeURIComponent(det.id)}/image.jpg`;
+        img.alt = det.prompt;
+        img.onerror = () => { imgWrap.textContent = 'Image evicted'; };
+        imgWrap.appendChild(img);
+      } else {
+        imgWrap.textContent = 'Image evicted';
+      }
+      card.appendChild(imgWrap);
 
-  const foot = document.createElement('div');
-  foot.className = 'det-card-foot';
-  const labelEl = document.createElement('label');
-  const cb = document.createElement('input');
-  cb.type = 'checkbox';
-  cb.checked = detectionMarkers.has(det.id);
-  cb.addEventListener('change', () => {
-    if (cb.checked) pinDetection(det); else unpinDetection(det.id);
-  });
-  labelEl.appendChild(cb);
-  labelEl.appendChild(document.createTextNode(' Pin to map'));
-  foot.appendChild(labelEl);
+      const foot = document.createElement('div');
+      foot.className = 'det-card-foot';
+      const labelEl = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = detectionMarkers.has(det.id);
+      cb.addEventListener('change', () => {
+        if (cb.checked) pinDetection(det); else unpinDetection(det.id);
+      });
+      labelEl.appendChild(cb);
+      labelEl.appendChild(document.createTextNode(' Pin to map'));
+      foot.appendChild(labelEl);
 
-  const coords = document.createElement('span');
-  coords.className = 'det-card-coords';
-  coords.textContent = `${det.lat.toFixed(5)}, ${det.lng.toFixed(5)}`;
-  foot.appendChild(coords);
+      // Description (Gemini) checkbox — identical UX to the lightbox, scoped to this card.
+      const descLabel = document.createElement('label');
+      const descCb = document.createElement('input');
+      descCb.type = 'checkbox';
+      const descResult = document.createElement('div');
+      descResult.className = 'desc-result';
+      descCb.addEventListener('change', () => {
+        if (descCb.checked) fetchDescription(det.id, descResult);
+        else descResult.classList.remove('is-visible', 'is-loading');
+      });
+      descLabel.appendChild(descCb);
+      descLabel.appendChild(document.createTextNode(' Description'));
+      foot.appendChild(descLabel);
 
-  card.appendChild(foot);
-  return card;
-}
+      const coords = document.createElement('span');
+      coords.className = 'det-card-coords';
+      coords.textContent = `${det.lat.toFixed(5)}, ${det.lng.toFixed(5)}`;
+      foot.appendChild(coords);
 
-function pinDetection(det) {
-  if (detectionMarkers.has(det.id)) return;
-  const marker = L.circleMarker([det.lat, det.lng], {
-    pane: 'detectionsPane',
-    radius: 7, color: '#fff', weight: 2,
-    fillColor: '#f85149', fillOpacity: 1,
-  }).addTo(map);
-
-  // Rich hover tooltip with a small frame preview. Leaflet renders tooltips
-  // lazily, so the <img> isn't fetched until the operator hovers the marker.
-  const label = esc(det.droneLabel || det.droneId);
-  const prompt = esc(det.prompt);
-  const imgHtml = det.has_image
-    ? `<img class="det-tip-img" src="/api/detections/${encodeURIComponent(det.id)}/image.jpg" alt="">`
-    : '';
-  marker.bindTooltip(
-    `${imgHtml}<div class="det-tip-prompt">${prompt}</div><div class="det-tip-drone">${label}</div>`,
-    { direction: 'top', offset: [0, -8], className: 'det-preview-tooltip', sticky: true, opacity: 1 }
-  );
-  // Clicking a marker opens the full-screen frame.
-  marker.on('click', () => {
-    if (det.has_image) {
-      openLightbox(`/api/detections/${encodeURIComponent(det.id)}/image.jpg`,
-                   `${det.droneLabel || det.droneId} — ${det.prompt}`);
+      card.appendChild(foot);
+      // Attach the description output area AFTER the foot so it spans the whole card width.
+      card.appendChild(descResult);
+      return card;
     }
-  });
 
-  detectionMarkers.set(det.id, marker);
-  unpinnedIds.delete(det.id);
-}
+    function pinDetection(det) {
+      if (detectionMarkers.has(det.id)) return;
+      const marker = L.circleMarker([det.lat, det.lng], {
+        pane: 'detectionsPane',
+        radius: 7, color: '#fff', weight: 2,
+        fillColor: '#f85149', fillOpacity: 1,
+      }).addTo(map);
 
-function unpinDetection(detId) {
-  const marker = detectionMarkers.get(detId);
-  if (marker) { map.removeLayer(marker); detectionMarkers.delete(detId); }
-  unpinnedIds.add(detId);
-}
+      // Rich hover tooltip with a small frame preview. Leaflet renders tooltips
+      // lazily, so the <img> isn't fetched until the operator hovers the marker.
+      const label = esc(det.droneLabel || det.droneId);
+      const prompt = esc(det.prompt);
+      const imgHtml = det.has_image
+        ? `<img class="det-tip-img" src="/api/detections/${encodeURIComponent(det.id)}/image.jpg" alt="">`
+        : '';
+      marker.bindTooltip(
+        `${imgHtml}<div class="det-tip-prompt">${prompt}</div><div class="det-tip-drone">${label}</div>`,
+        { direction: 'top', offset: [0, -8], className: 'det-preview-tooltip', sticky: true, opacity: 1 }
+      );
+      // Clicking a marker opens the full-screen frame.
+      marker.on('click', () => {
+        if (det.has_image) {
+          openLightbox(`/api/detections/${encodeURIComponent(det.id)}/image.jpg`,
+            `${det.droneLabel || det.droneId} — ${det.prompt}`,
+            det.id);
+        }
+      });
 
-// ── Fullscreen lightbox ──────────────────────────────────────────────────
-const lightboxEl = document.getElementById('lightbox');
-const lightboxImg = document.getElementById('lightbox-img');
-const lightboxCap = document.getElementById('lightbox-caption');
+      detectionMarkers.set(det.id, marker);
+      unpinnedIds.delete(det.id);
+    }
 
-function openLightbox(src, caption) {
-  lightboxImg.src = src;
-  lightboxCap.textContent = caption || '';
-  lightboxEl.classList.add('is-open');
-  lightboxEl.setAttribute('aria-hidden', 'false');
-}
-function closeLightbox() {
-  lightboxEl.classList.remove('is-open');
-  lightboxEl.setAttribute('aria-hidden', 'true');
-  // Unset src so MJPEG streams actually stop (the browser keeps them alive
-  // on display:none otherwise).
-  lightboxImg.src = '';
-}
-lightboxEl.addEventListener('click', (e) => {
-  // Backdrop click closes; clicks on the image/caption don't.
-  if (e.target === lightboxEl) closeLightbox();
-});
-document.getElementById('lightbox-close').addEventListener('click', closeLightbox);
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && lightboxEl.classList.contains('is-open')) closeLightbox();
-});
+    function unpinDetection(detId) {
+      const marker = detectionMarkers.get(detId);
+      if (marker) { map.removeLayer(marker); detectionMarkers.delete(detId); }
+      unpinnedIds.add(detId);
+    }
 
-// Notification row → open the detection's frame full-screen.
-document.getElementById('notif-list').addEventListener('click', (e) => {
-  const li = e.target.closest('.notif-item');
-  if (!li) return;
-  const det = detectionsById.get(li.dataset.detId);
-  if (!det) return;
-  if (det.has_image) {
-    openLightbox(
-      `/api/detections/${encodeURIComponent(det.id)}/image.jpg`,
-      `${det.droneLabel || det.droneId} — ${det.prompt}`
-    );
-  }
-});
+    // ── Description (Gemini) — shared fetcher + renderer ────────────────────
+    // Fetches /api/detections/{id}/describe, caches the result on the in-memory
+    // detection object, and renders into the supplied container element.
+    function renderDescription(result, container) {
+      const c = Math.max(0, Math.min(100, Number(result.confidence) || 0));
+      const cls = c >= 70 ? 'is-high' : c >= 40 ? 'is-mid' : 'is-low';
+      container.innerHTML =
+        `<span class="desc-text">${esc(result.description)}</span>` +
+        `<span class="desc-confidence ${cls}">${c}%</span>`;
+      container.classList.add('is-visible');
+      container.classList.remove('is-loading');
+    }
 
-async function openDetectionsPanel() {
-  // Pick up anything that landed since the last bootstrap (server may have
-  // recorded detections while the panel was closed — or addDetection was
-  // called for them already, in which case bootstrapDetections is a no-op).
-  await bootstrapDetections();
-  document.getElementById('map').style.display = 'none';
-  document.getElementById('detections-panel').classList.add('is-open');
-  renderDetectionsPanel();
-}
+    async function fetchDescription(detId, container) {
+      const det = detectionsById.get(detId);
+      if (det && det.description !== undefined) {
+        renderDescription({ description: det.description, confidence: det.confidence }, container);
+        return;
+      }
+      container.textContent = 'Asking Gemini…';
+      container.classList.add('is-visible', 'is-loading');
+      try {
+        const res = await fetch(`/api/detections/${encodeURIComponent(detId)}/describe`, { method: 'POST' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (det) { det.description = data.description; det.confidence = data.confidence; }
+        renderDescription(data, container);
+      } catch (e) {
+        container.textContent = `Description failed: ${e.message}`;
+        container.classList.remove('is-loading');
+      }
+    }
 
-function closeDetectionsPanel() {
-  document.getElementById('detections-panel').classList.remove('is-open');
-  document.getElementById('map').style.display = '';
-  // Map tiles can mis-lay out after being hidden; nudge Leaflet.
-  setTimeout(() => map.invalidateSize(), 50);
-}
+    // ── Fullscreen lightbox ──────────────────────────────────────────────────
+    const lightboxEl = document.getElementById('lightbox');
+    const lightboxImg = document.getElementById('lightbox-img');
+    const lightboxCap = document.getElementById('lightbox-caption');
+    const lightboxDescWrap = document.getElementById('lightbox-desc');
+    const lightboxDescCheck = document.getElementById('lightbox-desc-check');
+    const lightboxDescResult = document.getElementById('lightbox-desc-result');
+    let lightboxDetId = null;
 
-document.getElementById('notif-expand').addEventListener('click', (e) => {
-  e.stopPropagation();
-  openDetectionsPanel();
-});
-document.getElementById('det-close').addEventListener('click', closeDetectionsPanel);
+    function openLightbox(src, caption, detectionId) {
+      lightboxImg.src = src;
+      lightboxCap.textContent = caption || '';
+      lightboxEl.classList.add('is-open');
+      lightboxEl.setAttribute('aria-hidden', 'false');
 
-// ── Prompt dispatch ───────────────────────────────────────────────────────
-document.getElementById('btn-dispatch').addEventListener('click', () => {
-  const prompt = document.getElementById('prompt-textarea').value.trim();
-  if (!prompt) return;
-  fetch('/api/prompt', {method: 'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt})});
-  console.log('Dispatch prompt:', prompt);
-});
+      // Reset + show/hide the description controls based on whether this is a detection.
+      lightboxDetId = detectionId || null;
+      lightboxDescCheck.checked = false;
+      lightboxDescResult.className = 'desc-result';
+      lightboxDescResult.textContent = '';
+      lightboxDescWrap.style.display = lightboxDetId ? '' : 'none';
+    }
+    function closeLightbox() {
+      lightboxEl.classList.remove('is-open');
+      lightboxEl.setAttribute('aria-hidden', 'true');
+      // Unset src so MJPEG streams actually stop (the browser keeps them alive
+      // on display:none otherwise).
+      lightboxImg.src = '';
+      lightboxDetId = null;
+    }
 
-// ── Live sync ─────────────────────────────────────────────────────────────
-let livePollHandle = null;
-let liveWs = null;
-let liveWsRetry = 1000;
+    lightboxDescCheck.addEventListener('change', () => {
+      if (!lightboxDetId) return;
+      if (lightboxDescCheck.checked) {
+        fetchDescription(lightboxDetId, lightboxDescResult);
+      } else {
+        lightboxDescResult.classList.remove('is-visible', 'is-loading');
+      }
+    });
+    lightboxEl.addEventListener('click', (e) => {
+      // Backdrop click closes; clicks on the image/caption don't.
+      if (e.target === lightboxEl) closeLightbox();
+    });
+    document.getElementById('lightbox-close').addEventListener('click', closeLightbox);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && lightboxEl.classList.contains('is-open')) closeLightbox();
+    });
 
-async function fetchAndRender() {
-  try {
-    const res = await fetch('/api/drones');
-    if (!res.ok) throw new Error(res.status);
-    const data = await res.json();
-    reconcileLive(data.drones || []);
-  } catch (e) {
-    console.warn('ARGUS poll failed:', e.message);
-  }
-}
+    // Notification row → open the detection's frame full-screen.
+    document.getElementById('notif-list').addEventListener('click', (e) => {
+      const li = e.target.closest('.notif-item');
+      if (!li) return;
+      const det = detectionsById.get(li.dataset.detId);
+      if (!det) return;
+      if (det.has_image) {
+        openLightbox(
+          `/api/detections/${encodeURIComponent(det.id)}/image.jpg`,
+          `${det.droneLabel || det.droneId} — ${det.prompt}`,
+          det.id
+        );
+      }
+    });
 
-function connectLiveWs() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  try { liveWs = new WebSocket(`${proto}://${location.host}/ws/drones`); } catch (_) { return; }
-  liveWs.addEventListener('open', () => { liveWsRetry = 1000; });
-  liveWs.addEventListener('message', (ev) => {
-    let data;
-    try { data = JSON.parse(ev.data); } catch (e) { console.warn('ws parse failed', e); return; }
-    // Process alerts FIRST so a failure in reconcileLive cannot starve detections.
-    try { (data.alerts || []).forEach(a => window.argusAddDetection(a)); }
-    catch (e) { console.warn('alert dispatch failed', e); }
-    try { reconcileLive(data.drones || []); }
-    catch (e) { console.warn('reconcileLive failed', e); }
-  });
-  liveWs.addEventListener('close', () => { setTimeout(connectLiveWs, liveWsRetry); liveWsRetry = Math.min(liveWsRetry * 2, 10000); });
-}
+    async function openDetectionsPanel() {
+      // Pick up anything that landed since the last bootstrap (server may have
+      // recorded detections while the panel was closed — or addDetection was
+      // called for them already, in which case bootstrapDetections is a no-op).
+      await bootstrapDetections();
+      // Hide the entire map-container (both 2D and 3D views) so the detections panel
+      // can claim the grid cell.
+      document.querySelector('.map-container').style.display = 'none';
+      document.getElementById('detections-panel').classList.add('is-open');
+      renderDetectionsPanel();
+    }
 
-fetchAndRender();
-livePollHandle = setInterval(fetchAndRender, 5000);
-connectLiveWs();
-bootstrapDetections();
-// Safety net: poll detections in case WS drops or skips a tick. addDetection
-// dedupes via detectionsById so this is idempotent and cheap.
-setInterval(bootstrapDetections, 5000);
+    function closeDetectionsPanel() {
+      document.getElementById('detections-panel').classList.remove('is-open');
+      document.querySelector('.map-container').style.display = '';
+      // Map tiles can mis-lay out after being hidden; nudge Leaflet.
+      setTimeout(() => map.invalidateSize(), 50);
+      if (map3d && is3DActive) setTimeout(() => map3d.resize(), 50);
+    }
+
+    document.getElementById('notif-expand').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openDetectionsPanel();
+    });
+    document.getElementById('det-close').addEventListener('click', closeDetectionsPanel);
+
+    // ── Theme toggle ─────────────────────────────────────────────────────────
+    // Initial attribute was already set by the tiny inline script in <head> to prevent
+    // FOUC; this just wires the button + keeps the glyph in sync.
+    (function () {
+      const btn = document.getElementById('theme-toggle');
+      const root = document.documentElement;
+      function paintButton() {
+        // Sun when we'd switch to dark, moon when we'd switch to light — glyph shows the
+        // *destination* of the toggle, which matches most OS conventions.
+        btn.textContent = root.dataset.theme === 'light' ? '☾' : '☀';
+      }
+      paintButton();
+      btn.addEventListener('click', () => {
+        const next = root.dataset.theme === 'light' ? 'dark' : 'light';
+        root.dataset.theme = next;
+        try { localStorage.setItem('argus-theme', next); } catch (_) { }
+        paintButton();
+      });
+    })();
+
+    // ── Prompt dispatch ───────────────────────────────────────────────────────
+    document.getElementById('btn-dispatch').addEventListener('click', () => {
+      const prompt = document.getElementById('prompt-textarea').value.trim();
+      if (!prompt) return;
+      fetch('/api/prompt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }) });
+      console.log('Dispatch prompt:', prompt);
+    });
+
+    // ── Live sync ─────────────────────────────────────────────────────────────
+    let livePollHandle = null;
+    let liveWs = null;
+    let liveWsRetry = 1000;
+
+    async function fetchAndRender() {
+      try {
+        const res = await fetch('/api/drones');
+        if (!res.ok) throw new Error(res.status);
+        const data = await res.json();
+        reconcileLive(data.drones || []);
+      } catch (e) {
+        console.warn('ARGUS poll failed:', e.message);
+      }
+    }
+
+    function connectLiveWs() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      try { liveWs = new WebSocket(`${proto}://${location.host}/ws/drones`); } catch (_) { return; }
+      liveWs.addEventListener('open', () => { liveWsRetry = 1000; });
+      liveWs.addEventListener('message', (ev) => {
+        let data;
+        try { data = JSON.parse(ev.data); } catch (e) { console.warn('ws parse failed', e); return; }
+        // Process alerts FIRST so a failure in reconcileLive cannot starve detections.
+        try { (data.alerts || []).forEach(a => window.argusAddDetection(a)); }
+        catch (e) { console.warn('alert dispatch failed', e); }
+        try { reconcileLive(data.drones || []); }
+        catch (e) { console.warn('reconcileLive failed', e); }
+      });
+      liveWs.addEventListener('close', () => { setTimeout(connectLiveWs, liveWsRetry); liveWsRetry = Math.min(liveWsRetry * 2, 10000); });
+    }
+
+    fetchAndRender();
+    livePollHandle = setInterval(fetchAndRender, 5000);
+    connectLiveWs();
+    bootstrapDetections();
+    // Safety net: poll detections in case WS drops or skips a tick. addDetection
+    // dedupes via detectionsById so this is idempotent and cheap.
+    setInterval(bootstrapDetections, 5000);
+
+    // ── 3D Map (MapLibre GL JS + OpenFreeMap) ────────────────────────────────
+    // Lazily-initialized 3D view using OpenStreetMap vector tiles with extruded building
+    // geometry. Toggled via the 2D/3D button in the map's top-right corner.
+    //
+    // Drones are rendered as discs floating at ~100 m altitude so the operator can SEE
+    // them flying; their planned path is drawn as a thin ribbon at the same altitude.
+    // Implementation uses MapLibre `fill-extrusion` layers because that's the only
+    // style-spec primitive in MapLibre 4.x that supports world-space Z. Drone positions
+    // come from telemetry; the altitude is a fixed visualization-only value (the real
+    // WGS84 altitude from telemetry tends to be tens-of-meters AGL which renders as
+    // almost-ground and defeats the purpose of a 3D view).
+    let map3d = null;
+    let is3DActive = false;
+    const detection3dMarkers = new Map();  // detection id → maplibregl.Marker (stays on the ground)
+
+    const DRONE_SKY_ALT_M = 100;   // drones + paths float at this altitude in 3D
+    const DRONE_DISC_HALF_M = 3;     // ± around DRONE_SKY_ALT_M → 6 m tall cylinder
+    const DRONE_DISC_RADIUS = 8;     // horizontal radius of the drone disc in meters
+    const PATH_RIBBON_HALF_M = 1;     // ± around altitude → 2 m tall ribbon
+    const PATH_RIBBON_WIDTH = 3;     // meters — ribbon thickness perpendicular to travel
+
+    // Meter-to-degree conversion for a given latitude (WGS84 equirectangular approximation,
+    // fine for sub-kilometer geometry like drone markers and path ribbons).
+    function mDegAt(lat) {
+      return {
+        latPerM: 1 / 111320,
+        lngPerM: 1 / (111320 * Math.cos(lat * Math.PI / 180)),
+      };
+    }
+
+    function discPolygon(lng, lat, radiusM, sides = 18) {
+      const { latPerM, lngPerM } = mDegAt(lat);
+      const ring = [];
+      for (let i = 0; i <= sides; i++) {
+        const theta = (i / sides) * 2 * Math.PI;
+        ring.push([lng + Math.cos(theta) * radiusM * lngPerM,
+        lat + Math.sin(theta) * radiusM * latPerM]);
+      }
+      return [ring];
+    }
+
+    function ribbonSegment(aLng, aLat, bLng, bLat, widthM) {
+      const midLat = (aLat + bLat) / 2;
+      const { latPerM, lngPerM } = mDegAt(midLat);
+      const dxM = (bLng - aLng) / lngPerM;
+      const dyM = (bLat - aLat) / latPerM;
+      const len = Math.hypot(dxM, dyM) || 1;
+      // Perpendicular, scaled to half-width, back to degrees.
+      const offLngDeg = (-dyM / len) * (widthM / 2) * lngPerM;
+      const offLatDeg = (dxM / len) * (widthM / 2) * latPerM;
+      return [[
+        [aLng + offLngDeg, aLat + offLatDeg],
+        [bLng + offLngDeg, bLat + offLatDeg],
+        [bLng - offLngDeg, bLat - offLatDeg],
+        [aLng - offLngDeg, aLat - offLatDeg],
+        [aLng + offLngDeg, aLat + offLatDeg],
+      ]];
+    }
+
+    function ensureMap3DInitialized() {
+      if (map3d) return map3d;
+
+      // Seed with the Leaflet map's current view so the toggle feels continuous.
+      const c = map.getCenter();
+      map3d = new maplibregl.Map({
+        container: 'map3d',
+        // OpenFreeMap Liberty — free, no API key, includes full OSM vector data.
+        style: 'https://tiles.openfreemap.org/styles/liberty',
+        center: [c.lng, c.lat],
+        zoom: map.getZoom(),
+        pitch: 55,         // tilted view so buildings read as 3D
+        bearing: -17,
+        antialias: true,
+        attributionControl: true,
+      });
+      map3d.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-left');
+
+      map3d.on('load', () => {
+        // Find the first symbol layer so labels render ON TOP of extruded buildings.
+        const layers = map3d.getStyle().layers;
+        let firstSymbolId;
+        for (const l of layers) { if (l.type === 'symbol') { firstSymbolId = l.id; break; } }
+
+        // ── 3D buildings ────────────────────────────────────────────────────
+        map3d.addLayer({
+          id: 'argus-3d-buildings',
+          source: 'openmaptiles',
+          'source-layer': 'building',
+          filter: ['!=', ['get', 'hide_3d'], true],
+          type: 'fill-extrusion',
+          minzoom: 13,
+          paint: {
+            'fill-extrusion-color': [
+              'interpolate', ['linear'], ['get', 'render_height'],
+              0, '#d9d4c7', 20, '#c3bca8', 60, '#a89e80', 200, '#7a6f58',
+            ],
+            'fill-extrusion-height': ['coalesce', ['get', 'render_height'], ['get', 'height'], 6],
+            'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0],
+            'fill-extrusion-opacity': 0.92,
+          },
+        }, firstSymbolId);
+
+        // ── Drone path ribbons floating at DRONE_SKY_ALT_M ──────────────────
+        map3d.addSource('argus-paths-sky', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+        map3d.addLayer({
+          id: 'argus-paths-sky',
+          type: 'fill-extrusion',
+          source: 'argus-paths-sky',
+          paint: {
+            'fill-extrusion-color': ['get', 'color'],
+            'fill-extrusion-base': DRONE_SKY_ALT_M - PATH_RIBBON_HALF_M,
+            'fill-extrusion-height': DRONE_SKY_ALT_M + PATH_RIBBON_HALF_M,
+            'fill-extrusion-opacity': 0.85,
+          },
+        });
+
+        // ── Drone disc markers at DRONE_SKY_ALT_M ───────────────────────────
+        map3d.addSource('argus-drones-sky', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+        map3d.addLayer({
+          id: 'argus-drones-sky',
+          type: 'fill-extrusion',
+          source: 'argus-drones-sky',
+          paint: {
+            'fill-extrusion-color': ['get', 'color'],
+            'fill-extrusion-base': DRONE_SKY_ALT_M - DRONE_DISC_HALF_M,
+            'fill-extrusion-height': DRONE_SKY_ALT_M + DRONE_DISC_HALF_M,
+            'fill-extrusion-opacity': 0.95,
+          },
+        });
+
+        // Paint existing drones + detections that are already on the Leaflet map.
+        syncDronesTo3D();
+        syncDetectionsTo3D();
+      });
+
+      return map3d;
+    }
+
+    function buildDetectionPinElement() {
+      const el = document.createElement('div');
+      el.style.cssText = `
+    width: 11px; height: 11px; border-radius: 50%;
+    background: #f85149; border: 2px solid #fff;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.4), 0 2px 6px rgba(0,0,0,0.5);
+  `;
+      return el;
+    }
+
+    function syncDronesTo3D() {
+      if (!map3d || !map3d.isStyleLoaded() || !map3d.getSource('argus-drones-sky')) return;
+
+      const droneFeatures = [];
+      const pathFeatures = [];
+
+      for (const [id, d] of liveByBackendId) {
+        if (d.lat == null || d.lng == null) continue;
+        const color = d.color || '#58a6ff';
+        // Disc at altitude for the drone itself.
+        droneFeatures.push({
+          type: 'Feature',
+          properties: { id, color, label: d.label || id },
+          geometry: { type: 'Polygon', coordinates: discPolygon(d.lng, d.lat, DRONE_DISC_RADIUS) },
+        });
+
+        // Planned path → ribbon-per-segment at the same altitude. Registry stores
+        // `path` as an array of {lat, lon|lng, alt} waypoints; we ignore the z and
+        // paint everything at DRONE_SKY_ALT_M for visualization consistency.
+        const pts = (d.path || []).map(p => [p.lon ?? p.lng, p.lat]).filter(([lng, lat]) => lng != null && lat != null);
+        for (let i = 0; i < pts.length - 1; i++) {
+          pathFeatures.push({
+            type: 'Feature',
+            properties: { id, color },
+            geometry: { type: 'Polygon', coordinates: ribbonSegment(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], PATH_RIBBON_WIDTH) },
+          });
+        }
+      }
+
+      map3d.getSource('argus-drones-sky').setData({ type: 'FeatureCollection', features: droneFeatures });
+      map3d.getSource('argus-paths-sky').setData({ type: 'FeatureCollection', features: pathFeatures });
+    }
+
+    function syncDetectionsTo3D() {
+      if (!map3d) return;
+      // Only reflect detections the user has explicitly pinned in 2D — keeps the 3D
+      // view uncluttered on busy prompts, consistent with how Leaflet treats pins.
+      for (const [id, m2d] of detectionMarkers) {
+        if (detection3dMarkers.has(id)) continue;
+        const det = detectionsById.get(id);
+        if (!det || det.lat == null || det.lng == null) continue;
+        const m3d = new maplibregl.Marker({ element: buildDetectionPinElement() })
+          .setLngLat([det.lng, det.lat])
+          .setPopup(new maplibregl.Popup({ offset: 10 }).setHTML(
+            `<strong>${esc(det.droneLabel || det.droneId)}</strong><br>${esc(det.prompt)}`
+          ))
+          .addTo(map3d);
+        detection3dMarkers.set(id, m3d);
+      }
+      for (const [id, m3d] of detection3dMarkers) {
+        if (!detectionMarkers.has(id)) { m3d.remove(); detection3dMarkers.delete(id); }
+      }
+    }
+
+    function activate3D() {
+      if (is3DActive) return;
+      is3DActive = true;
+      document.getElementById('map').classList.add('is-hidden');
+      document.getElementById('map3d').classList.remove('is-hidden');
+      document.getElementById('map-mode-2d').classList.remove('is-active');
+      document.getElementById('map-mode-3d').classList.add('is-active');
+      // Init ONLY after the container is visible — MapLibre reads container dimensions
+      // on construction, and if the div is still display:none it sees 0×0 and never
+      // renders. `requestAnimationFrame` lets the browser lay out the now-visible div
+      // before we hand it to MapLibre.
+      requestAnimationFrame(() => {
+        ensureMap3DInitialized();
+        // Sync view from Leaflet on every activate so the two stay aligned.
+        const c = map.getCenter();
+        map3d.jumpTo({ center: [c.lng, c.lat], zoom: map.getZoom() });
+        map3d.resize();
+        syncDronesTo3D();
+        syncDetectionsTo3D();
+      });
+    }
+
+    function activate2D() {
+      if (!is3DActive) return;
+      is3DActive = false;
+      document.getElementById('map3d').classList.add('is-hidden');
+      document.getElementById('map').classList.remove('is-hidden');
+      document.getElementById('map-mode-3d').classList.remove('is-active');
+      document.getElementById('map-mode-2d').classList.add('is-active');
+      // Pull view from 3D back to 2D so the user doesn't lose their place.
+      if (map3d) {
+        const c = map3d.getCenter();
+        map.setView([c.lat, c.lng], Math.round(map3d.getZoom()));
+      }
+      setTimeout(() => map.invalidateSize(), 50);
+    }
+
+    document.getElementById('map-mode-3d').addEventListener('click', activate3D);
+    document.getElementById('map-mode-2d').addEventListener('click', activate2D);
+
+    // Piggy-back on the existing live-sync ticks so 3D markers track telemetry.
+    (function () {
+      const origReconcile = reconcileLive;
+      window.reconcileLive = reconcileLive = function (snapshots) {
+        origReconcile(snapshots);
+        if (is3DActive) syncDronesTo3D();
+      };
+      const origPin = pinDetection;
+      window.pinDetection = pinDetection = function (det) {
+        origPin(det);
+        if (is3DActive) syncDetectionsTo3D();
+      };
+      const origUnpin = unpinDetection;
+      window.unpinDetection = unpinDetection = function (id) {
+        origUnpin(id);
+        if (is3DActive) syncDetectionsTo3D();
+      };
+    })();
 
 
-// ── Utility ───────────────────────────────────────────────────────────────
-function esc(s) {
-  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-</script>
+    // ── Utility ───────────────────────────────────────────────────────────────
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+  </script>
 </body>
+
 </html>
