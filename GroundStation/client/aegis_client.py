@@ -37,7 +37,7 @@ has_started_mission = False
 # Dynamic state variables controlled by Hub
 current_trajectory = []
 final_yaw = 0
-target_altitude = 200.0
+target_altitude = 30.0
 path_ready_event = threading.Event()
 ws_app: websocket.WebSocketApp = None
 dji: DJIInterface = None
@@ -107,7 +107,7 @@ def on_ws_message(ws, message):
     if data.get("action") == "path_update":
         path = data.get("waypoints", [])
         final_yaw = data.get("finalYaw", 0)
-        target_altitude = float(data.get("targetAltitude", 200.0))
+        target_altitude = float(data.get("targetAltitude", 30.0))
         
         print(f"\n[Hub] Received dynamic path update with {len(path)} waypoints (Alt: {target_altitude}m).")
         
@@ -232,7 +232,7 @@ def main():
                     target_lon = current_trajectory[-1][1]
                     
                     dist = get_distance(lat, lon, target_lat, target_lon)
-                    if dist < 0.5:
+                    if dist < 5.0:
                         print(f"Reached end of path segment (Dist: {dist:.1f}m). Reversing...")
                         current_trajectory = current_trajectory[::-1]
                         time.sleep(2)
