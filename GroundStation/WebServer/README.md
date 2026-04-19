@@ -1,90 +1,100 @@
 # ARGUS Hub (WebServer)
 
-A FastAPI server that sits between a browser and one-or-more WildBridge Android apps running on DJI RCs. Hosts a Leaflet multi-drone dashboard at `/` and a per-drone control + MJPEG video UI at `/drone/{id}`.
+FastAPI server that pairs with **WildBridge** edge clients (one per drone) to form a multi-drone swarm dashboard. Runs an in-process **SAM 3.1** vision loop that continuously scans every connected drone's live video against a natural-language prompt and surfaces hits (with the SAM-overlaid frame) in the dashboard.
 
-For the big picture (roadmap, full swarm vision) see `../../docs/ARCHITECTURE.md`.
+For the big picture and roadmap see `../../docs/ARCHITECTURE.md`.
 
 ## Install
 
 ```bash
 cd GroundStation/WebServer
+python -m venv .venv && source .venv/bin/activate   # PowerShell: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-Python 3.9+.
+Python 3.9+. A CUDA GPU is recommended for SAM 3.1; `--cpu` works for dev but runs seconds per frame.
 
 ## Run
 
-### Mock mode (no drone / no RC required)
-
 ```bash
-python -m app --mock
+python -m app                        # Live
+python -m app --test                 # 5×5 m patrol paths at 10 m altitude (flight sims)
+python -m app --cpu                  # Force SAM onto CPU instead of CUDA GPU 0
 ```
 
-Opens `http://localhost:8000`. Seeds a single mock drone (`mock-1`) at Ljubljana so the dashboard and single-drone UI have something to show. Every command is logged to stdout.
+Visit `http://localhost:8000`.
 
-### Live mode (real RCs on the LAN)
-
-Copy the example registry, edit it for your drones, then launch:
-
-```bash
-cp drones.example.json drones.json
-python -m app
-```
-
-The RCs must be powered on, the WildBridge app must be running, and its **"Testing Tools → Virtual Stick"** page must be foregrounded (that's what starts the per-RC port-8080 server).
-
-Add or remove drones at runtime via the dashboard's `+ Register drone` button — the registry is persisted back to `drones.json`.
+The hub is entirely in-memory — nothing is persisted. Drones don't need to be pre-registered; they join automatically when an edge client connects.
 
 ### Flags
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--mock` | off | Force all drones to mock mode; seed a Ljubljana mock drone if registry is empty. |
-| `--drones-config PATH` | `./drones.json` | Registry file (JSON). Persisted on every add/remove. |
-| `--host HOST` | `127.0.0.1` | Bind address. `0.0.0.0` to expose on LAN. |
-| `--port PORT` | `8000` | Web-server port. |
-| `--max-stick F` | `0.3` | Saturation cap for stick axes in `[0, 1]`. Matches the upstream safety cap. |
-| `--no-video` | off | Disable video broadcasters for all drones (skips RTSP). |
+| `--host` | `127.0.0.1` | Bind address. `0.0.0.0` to expose on LAN. |
+| `--port` | `8000` | Web-server port. |
+| `--test` | off | Small 5×5 m patrol paths at 10 m altitude (for flight sims). |
+| `--cpu` | off | Force SAM onto CPU instead of CUDA GPU 0. |
 
-## UI
+## Simulated multi-drone setup
 
-- **`/`** — Leaflet dashboard. `Live` mode renders real connected drones (from `/api/drones` + `/ws/drones`). `Planning` mode is the Boustrophedon patrol-path planner — click to place drones, adjust reach/spacing, save plan to `plans/`.
-- **`/drone/{id}`** — joysticks (yaw/throttle + roll/pitch), Takeoff / Land / RTH / Enable-VS / hard-stop, activity log, MJPEG video tab.
-- **`/video?drone={id}`** — standalone full-screen MJPEG viewer.
+The architecture is edge-driven — drones *push* video and telemetry to the hub — so a local simulation needs three processes per drone:
+
+```bash
+# Terminal 1 — the hub
+python -m app
+
+# Terminal 2 — fake a DJI RC at 127.0.0.1:8082/8083
+python client/mock_remote.py --port-http 8082 --port-tcp 8083 --lat 46.0569 --lng 14.5058
+
+# Terminal 3 — the edge agent that bridges the fake RC to the hub
+python client/aegis_client.py --ip 127.0.0.1 --port-http 8082 --port-tcp 8083
+```
+
+For a second simulated drone, run a second mock on different ports (e.g. `--port-http 8084 --port-tcp 8085 --lat ...`) and a second `aegis_client.py` pointing at it. Each mock uses the local webcam for video; use `--image-folder <dir>` on subsequent mocks to avoid the camera-device lock conflict.
+
+## Dashboard
+
+One page at `/`:
+
+- **Search Target** — enter a natural-language prompt and dispatch to the swarm. SAM 3.1 starts matching against every drone's next frame.
+- **Detections** — live list of matched frames (drone + prompt). Click any row to see the SAM-overlaid frame full-screen. The ⛶ button opens the expanded detections panel in the map slot — scrollable card grid with per-detection *Pin to map* checkbox. New detections also trigger a 2-second toast bottom-right.
+- **Drones** — auto-populated camera-tile grid, one tile per connected edge client. ⛶ on a tile opens that drone's live MJPEG full-screen in the same lightbox.
+- **Map** — every connected drone renders as a marker with a coloured path line. Every detection auto-pins at the drone's GPS *at detection time* with a hover preview of the frame; the hub never moves those pins even if the drone does.
 
 ## Endpoints
 
-All control/video routes are namespaced per drone.
-
-| Method | Path | Forwards to |
+| Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/health` | — |
-| GET | `/api/drones` | List + telemetry snapshot per drone |
-| POST | `/api/drones` | Register; body `{id, rc_ip, label?, home_lat?, home_lng?, reach_m?, mock?, enable_video?}` |
-| GET | `/api/drones/{id}` | Single snapshot |
-| DELETE | `/api/drones/{id}` | Remove from registry (stops its video broadcaster) |
-| POST | `/api/drones/{id}/virtual-stick/enable` | RC `/send/enableVirtualStick` |
-| POST | `/api/drones/{id}/virtual-stick/disable` | RC `/send/abortMission` |
-| POST | `/api/drones/{id}/stick` | `{leftX, leftY, rightX, rightY}` → RC `/send/stick` |
-| POST | `/api/drones/{id}/takeoff` · `/land` · `/rth` | Matching RC command |
-| WS | `/ws/drones/{id}/stick` | Stick stream — 20 Hz forward cap + 500 ms deadman |
-| WS | `/ws/drones` | 1 Hz fan-out of telemetry snapshots for the dashboard |
-| GET | `/api/drones/{id}/video/status` | `{connected, fps, width, height, last_frame_age_s, mode}` |
-| GET | `/api/drones/{id}/video/snapshot.jpg` | Latest JPEG |
-| GET | `/api/drones/{id}/video.mjpg` | `multipart/x-mixed-replace` MJPEG stream |
-| POST | `/api/plans` | Persist a Boustrophedon plan JSON under `plans/` |
+| GET | `/` | Dashboard (static HTML + JS) |
+| GET | `/api/health` | `{ok, active_drones}` |
+| GET | `/api/drones` | All drone telemetry snapshots |
+| POST | `/api/prompt` | `{prompt}` — set the master SAM tracking prompt |
+| GET | `/api/detections` | All detection metadata (append-only history, cap 1000) |
+| GET | `/api/detections/{id}/image.jpg` | Annotated JPEG; 404 once evicted (latest 50 retained, FIFO) |
+| WS | `/ws/drones` | 1 Hz fan-out of snapshots + new-detection alerts for the dashboard |
+| WS | `/ws/swarm/{uuid}` | Edge-client bidirectional channel: join, telemetry, path updates |
+| POST | `/api/swarm/{uuid}/video` | Edge-client raw JPEG ingest |
+| GET | `/api/swarm/{uuid}/video.mjpg` | Dashboard-facing MJPEG re-stream for the tile grid and fullscreen lightbox |
 
-Interactive docs at `http://localhost:8000/docs`.
+Interactive docs at `/docs`.
 
-## Safety
+## Modules
 
-- **Always click "Enable Virtual Stick" first** on the per-drone page. `/send/stick` is ignored by the drone until virtual-stick mode is active.
-- **Big red DISABLE button** calls `/send/abortMission` — hard-stop.
-- **Deadman**: if the stick WebSocket closes or goes silent for 500 ms while sticks are held, the backend forwards one zeroed stick command automatically.
-- **No auth.** The RC's own HTTP server has no auth either. Only run on a trusted LAN.
+- `app/registry.py` — in-memory `DroneRegistry`: drone state, alert queue, detection metadata (cap 1000), detection JPEG store (FIFO cap 50).
+- `app/routes.py` — all HTTP + WebSocket routes listed above.
+- `app/vision.py` — `VisionDaemon`. Single background thread holding SAM 3.1 in VRAM, round-robin over every connected drone's latest frame, encodes an annotated JPEG via `Results.plot()`, calls `registry.record_detection(...)`.
+- `app/pathing.py` — server-side zigzag/sweep allocator; assigns non-overlapping sectors to drones as they join (or a single 5×5 m box in `--test`).
+- `app/main.py` — FastAPI factory. The lifespan starts the `VisionDaemon`.
+- `app/__main__.py` — argparse + uvicorn.
+- `static/dashboard.html` — single-file dashboard (CSS + JS inline). Talks to `/api/drones`, `/api/detections`, `/ws/drones`.
 
 ## Tools
 
 - `tools/check_video.py` — RTSP smoke test without the webapp.
-- `tools/sam3_webcam.py` — reference SAM 3 / Falcon Perception inference on a webcam. Not wired into the server; slated for the Vision Engine step in `../../docs/ARCHITECTURE.md §"Roadmap"`.
+- `tools/sam3_webcam.py` — reference SAM 3 inference on a local webcam. Not part of the hub; handy for verifying the Ultralytics install works before running the daemon.
+
+## Safety
+
+- **No auth.** Run on a trusted LAN only.
+- **The physical RC always overrides the hub.** If anything feels wrong, grab the sticks or press RTH on the RC.
+- **Enable Virtual Stick first.** The RC ignores `/send/stick` until virtual-stick mode is active. `aegis_client.py` does this automatically when it takes off.

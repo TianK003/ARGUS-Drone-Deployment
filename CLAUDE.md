@@ -19,12 +19,17 @@ Upstream paper: Rolland et al., *WildBridge* (RiTA 2025). EU Horizon Europe fund
   - Before editing any Kotlin, confirm which tree is live. Upstream appears to author changes in both `android-sdk-v5-as` and `android-sdk-v5-sample/src/main/java/dji/sampleV5/aircraft/`.
 - `GroundStation/Python/djiInterface.py` — **canonical HTTP + TCP client**. Wraps every command and telemetry field the RC exposes. Reuse it; do not reimplement the protocol.
 - `GroundStation/ROS/` — ROS 2 Humble wrapper that publishes telemetry as topics and exposes commands as services.
-- `GroundStation/WebServer/` — **ARGUS Hub**. The centralized backend and frontend.
-  - `app/vision.py`: **VisionDaemon** multiplexes video feeds across all drones using **SAM 3.1** on the GPU.
-  - `app/registry.py`: Manages the dynamic drone state and AI detection alert queues.
-  - `app/routes.py`: High-performance FastAPI routes for dashboard telemetry (1Hz fan-out), Edge client joining (WebSocket), and binary video ingest (POST).
-  - `app/pathing.py`: Server-side **zigzag/sweep path generator**; automatically allocates sectors to drones as they join to ensure swarm-wide coverage without overlaps.
-  - `static/dashboard.html`: The modern glassmorphic UI hub.
+- `GroundStation/WebServer/` — **ARGUS Hub**. Edge-driven FastAPI hub + dashboard. All state is in-memory; nothing is persisted.
+  - `app/vision.py`: `VisionDaemon` — a single background thread holding **SAM 3.1** in VRAM; round-robin inference over each connected drone's latest frame against the current master prompt. On a hit it calls `Results.plot()`, encodes the annotated JPEG, and posts a detection via `registry.record_detection(...)`.
+  - `app/registry.py`: `DroneRegistry`. Thread-safe drone state + per-tick alert queue + append-only detection metadata (cap 1000) + FIFO detection-image store (cap 50).
+  - `app/routes.py`: all HTTP + WebSocket routes. Dashboard-facing (`/ws/drones`, `/api/drones`, `/api/detections`, `/api/detections/{id}/image.jpg`, `/api/prompt`, `/api/swarm/{id}/video.mjpg`) and edge-client-facing (`/ws/swarm/{id}`, `POST /api/swarm/{id}/video`).
+  - `app/pathing.py`: server-side zigzag/sweep allocator; assigns non-overlapping sectors to drones as they join.
+  - `app/main.py`: FastAPI factory; `lifespan` starts the `VisionDaemon`.
+  - `app/__main__.py`: argparse + uvicorn.
+  - `static/dashboard.html`: single-file dashboard (HTML + CSS + JS inline). Renders the Leaflet map, connected drones, the Detections section (compact list + ⛶-expanded full-panel view replacing the map), a shared fullscreen lightbox (detection frames + live MJPEG), and detection toasts.
+- `GroundStation/client/` — edge agents that run alongside a DJI RC (or a simulated one):
+  - `aegis_client.py` — talks to the RC over the WildBridge HTTP/TCP contract AND to the hub over `/ws/swarm/{id}` (telemetry/paths) and `POST /api/swarm/{id}/video` (frames).
+  - `mock_remote.py` — fakes a DJI RC on localhost (HTTP on `--port-http`, TCP on `--port-tcp`); uses the local webcam for video unless `--image-folder` is supplied.
 - `docs/` — `ARCHITECTURE.md` (system + swarm roadmap) and `FILE_MAP.md` (one-line file catalogue).
 
 ## The network contract (load-bearing)
@@ -59,44 +64,54 @@ cd GroundStation/WebServer
 python -m venv .venv && source .venv/bin/activate   # PowerShell: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-python -m app                                         # Live: Edge drones join via WebSocket
-python -m app --test                                  # Dev: Use 5x5m tiny grids for flight sims
-python -m app --no-vision                             # Disable SAM 3.1 inference
+python -m app                                         # Live: edge drones join via WebSocket
+python -m app --test                                  # Dev: 5x5m tiny grids + 10m altitude for flight sims
+python -m app --cpu                                   # Force SAM onto CPU instead of CUDA GPU 0
 ```
 
-### Multi-Drone Mock Testing
-Launch the Hub, then run multiple edge clients:
-```powershell
-python -m client.mock_remote --id alpha --cam-folder ./mock/A/
-python -m client.mock_remote --id beta  --cam-folder ./mock/B/
+CLI flags: `--host` (default `127.0.0.1`), `--port` (default `8000`), `--test`, `--cpu`. No `--mock`, no `--no-vision`, no drones.json. The hub is entirely in-memory.
+
+### Simulated multi-drone setup (three processes per drone)
+The hub only speaks the edge-driven contract — drones push their own video/telemetry in. There is no server-side mock; you run an edge stack per simulated drone:
+```bash
+# Terminal 1 — the hub
+python -m app
+
+# Terminal 2 — fake a DJI RC at 127.0.0.1:8082/8083
+python client/mock_remote.py --port-http 8082 --port-tcp 8083 --lat 46.0569 --lng 14.5058
+
+# Terminal 3 — the edge agent that bridges the fake RC ↔ hub
+python client/aegis_client.py --ip 127.0.0.1 --port-http 8082 --port-tcp 8083
 ```
-Serves on `http://localhost:8000`. The landing page is the **Modern Dashboard** (`/`). 
-- **Swarm Connection**: Drones appear automatically when their edge client joins.
-- **AI Detections**: AI object hits from SAM 3.1 show up in the live notification tray via the `/ws/drones` broadcast.
-- **Direct Control**: `/drone/{id}` remains for manual cockpit overrides.
+For a second simulated drone: a second `mock_remote.py` on different ports (e.g. 8084/8085) + a second `aegis_client.py`. The mocks grab the local webcam for video; use `--image-folder` on subsequent mocks to avoid a camera-device lock conflict. `aegis_client.py` depends on `websocket-client` (NOT `websocket` — the two PyPI packages collide in the `websocket` namespace and only `websocket-client` provides `WebSocketApp`).
 
 Architecture in one diagram:
 ```
-dashboard dashboard ──HTTP/WS──► ARGUS Hub (:8000) ──WS Path Update─► Edge Client (mc)
-                                                  ──POST Master Prompt─► VisionDaemon (SAM 3.1)
-Edge Client (mc)   ──WS/JSON─► ARGUS Hub (Registry) ──WS Status Update─► Dashboard
-                   ──POST IMG─► ARGUS Hub (Vision)  
+browser ──HTTP/WS──► ARGUS Hub (:8000)
+                         │  ▲
+                         │  │ /ws/drones  (1 Hz telemetry + alerts)
+                         │  │ /api/detections[/{id}/image.jpg]
+                         ▼  │
+                     Registry + VisionDaemon (SAM 3.1, VRAM-resident)
+                         ▲  ▲
+                         │  │ /ws/swarm/{id}          (join + telemetry + path updates)
+                         │  │ POST /api/swarm/{id}/video  (JPEG frames)
+                         └──┴──────────── edge client (aegis_client.py)
+                                          └── HTTP/TCP/RTSP ──► DJI RC (WildBridge app) or mock_remote.py
 ```
 
-Core Python modules under `app/`:
-- `registry.py` — `DroneRegistry`: thread-safe add/remove/list + JSON persistence, owns one `LiveDroneClient` + `LiveVideoBroadcaster` per drone.
-- `routes.py` — per-drone routes namespaced under `/api/drones/{id}/...` (virtual-stick enable/disable, `/takeoff`, `/land`, `/rth`, `/stick`, `/video/status|snapshot.jpg|video.mjpg`). Stick WebSocket is `/ws/drones/{id}/stick` with the same 500 ms deadman + 20 Hz forward cap as before. `/ws/drones` fan-outs `{id → snapshot}` for the dashboard.
-- `drone_client.py` — `LiveDroneClient` wraps `djiInterface.DJIInterface`; `MockDroneClient` is a stdout stub.
-- `video.py` — `LiveVideoBroadcaster` (RTSP → OpenCV → JPEG with exponential-backoff reconnect) and `MockVideoBroadcaster`.
-- `main.py` — FastAPI factory. `/drone/{id}` injects `<script>window.DRONE_ID = "..."</script>` into `index.html` so the client JS knows which drone it's controlling.
-- `__main__.py` — argparse.
+### Dashboard surface (`static/dashboard.html`)
+Single-file HTML. Talks to `/api/drones`, `/api/detections`, `/ws/drones`. Features:
+- **Search Target** panel → `POST /api/prompt`, sets the master SAM prompt.
+- **Detections** section — compact list populated off `/ws/drones` alert fan-out AND a 5s polling fallback against `/api/detections` (WS alerts are the primary path; the poll is defensive). Click a row → fullscreen lightbox of the SAM-overlaid frame. ⛶ opens the expanded panel that replaces `#map` in the grid; the panel is a `grid-auto-rows: max-content` card grid with per-detection "Pin to map" checkbox.
+- **Auto-pinning**: every new detection automatically drops a marker on the map at the drone's GPS at detection time, with a hover-only Leaflet tooltip showing a thumbnail of the frame (leaflet lazy-renders tooltips, so thumbnails only fetch on hover).
+- **Live camera tiles** — ⛶ opens the drone's `/api/swarm/{id}/video.mjpg` in the same lightbox (MJPEG renders through a plain `<img>`; closing the lightbox nulls the src to actually terminate the stream).
+- **Toasts** — bottom-right, 2 s, fire on *live* detections only; `bootstrapDetections()` passes `silent: true` so page reloads / polling don't spam.
 
-Helper scripts: `tools/check_video.py` (RTSP smoke test), `tools/sam3_webcam.py` (reference SAM 3 / Falcon inference on a webcam, not wired into the server — see roadmap below).
-
-### Integrated Features
-- **Server-side path executor** — Algorithmic sector allocation is LIVE in `app/pathing.py`.
-- **Meta SAM 3 detection loop** — Centralized inference is LIVE in `app/vision.py`.
-- **WebRTC / GStreamer video transport** — *Roadmap*: Replacement for current MJPEG to get sub-200ms latency.
+### Integrated features
+- **Server-side path executor** — zigzag allocation in `app/pathing.py`.
+- **SAM 3.1 detection loop** — `app/vision.py`; produces detection metadata + annotated JPEGs stored in the registry.
+- **WebRTC / GStreamer video transport** — *roadmap*: replace the current MJPEG re-stream for sub-200 ms latency.
 
 ### ROS 2 ground station
 ```bash
@@ -105,7 +120,7 @@ ros2 launch wildview_bringup swarm_connection.launch.py
 
 ## Simulators
 
-The DJI Mobile SDK provides a built-in aircraft simulator (`SimulatorVM.kt` on the Android side). There is no separate simulator for ground-station code. The web backend's `--mock` flag stubs out HTTP calls so the UI can be developed without any drone or RC — it does **not** drive the DJI simulator.
+The DJI Mobile SDK provides a built-in aircraft simulator (`SimulatorVM.kt` on the Android side). For ground-station-only simulation the right primitive is `GroundStation/client/mock_remote.py` (fakes the RC's HTTP/TCP/RTSP surface locally) paired with `aegis_client.py`. There is no longer a hub-side `--mock` flag; the hub sees a mock and a real RC identically.
 
 ## Gotchas that burn time
 
@@ -116,8 +131,9 @@ The DJI Mobile SDK provides a built-in aircraft simulator (`SimulatorVM.kt` on t
 - Endpoint bodies are **plain CSV strings, not JSON** — a common mistake when writing new clients.
 - Waypoint commands use **absolute altitude in meters**, WGS84 decimal lat/lon, yaw in compass degrees.
 - The WildBridge phone/RC app's HTTP, TCP and RTSP servers only run while the **"Virtual Stick"** page is foregrounded. Any feature in the web backend (video feed included) dies silently if the page backgrounds or the screen locks. For a phone, disable battery-save for the app and turn on "Stay awake while charging" in Developer Options.
-- The web backend's `LiveVideoBroadcaster` auto-reconnects with exponential backoff (1s → 10s). A `connected: false` in `GET /api/drones/{id}/video/status` usually means the app isn't foregrounded — not a backend bug.
-- All control/video routes are now namespaced per drone (`/api/drones/{id}/...`). The old global `/api/stick`, `/ws/stick`, `/api/video.mjpg` paths from the pre-merge fork are **gone**. If you're porting code from before the ARGUS merge, it needs an id; if there was only one drone, add it to `drones.json` and hit its id.
+- The hub doesn't pull video from RTSP itself; `aegis_client.py` does that and POSTs JPEGs to `/api/swarm/{id}/video`. A drone's live tile going blank usually means either the RC app isn't foregrounded (so the aegis client's source is dry) or the aegis client process died. Check its stdout before debugging the hub.
+- The per-drone video routes are namespaced under `/api/swarm/{id}/...` (edge-driven). Any pre-edge fork that used `/api/drones/{id}/video.mjpg` or global `/api/stick`, `/ws/stick`, `/api/video.mjpg` is **gone** — no direct migration path; the hub no longer proxies control-plane commands at all, virtual-stick piloting happens inside `aegis_client.py` against the RC directly.
+- Detection state is in-memory: metadata cap is 1000 entries, JPEG cap is 50 (FIFO eviction, `has_image` flips to false once a frame is evicted). Restarting the hub clears everything.
 - The webapp's RC-side package name is pinned: `com.dji.sampleV5.aircraft`. That string must match exactly in the DJI developer portal App registration. The keystore (`msdkkeystore.jks`) is NOT in the repo — users generate it themselves with the passwords in `gradle.properties` (`123456` / alias `msdkkeystore`).
 
 ## Where NOT to put new code

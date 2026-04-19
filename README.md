@@ -34,14 +34,14 @@ This work is part of the WildDrone project, funded by the European Union's Horiz
 
 ### Key Features
 
-- **Real-time AI Vision (SAM 3.1)**: Centralized "VisionDaemon" multiplexes video feeds across the swarm for natural language object detection using Meta's SAM 3.1.
-- **Modern Glassmorphic UI**: High-fidelity dashboard for swarm-scale monitoring, integrated telemetry, and an AI "Detections Tray" for real-time alerts.
-- **Edge-Driven Architecture**: Drones join the hub natively via WebSockets; no manual pre-registration required.
-- **Server-Side Path Allocation**: Dynamic, algorithmic zigzag/sweep path calculation for the entire swarm, optimized to maintain controller LOS.
-- **Real-time Telemetry**: 20Hz low-latency telemetry processing and 1Hz fan-out to the UI.
-- **Live Swarm Video**: MJPEG multiplexing allows monitoring up to 10+ drones simultaneously in a single dashboard or camera wall.
-- **Multi-drone Coordination**: Support for massive concurrent fleets with sub-100ms command latency.
-- **Cross-platform Integration**: Compatible with standard DJI RC platforms, Python scripts, and mock simulation environments.
+- **Real-time AI Vision (SAM 3.1)**: Centralized `VisionDaemon` runs SAM 3.1 round-robin over every connected drone's live frame against a natural-language prompt, stores the last 50 annotated hit-frames, and surfaces every detection (drone, prompt, GPS, SAM-overlaid frame) to the UI via WebSocket fan-out.
+- **Detection Dashboard**: Clickable live detection list with per-detection fullscreen lightbox, auto-pinning of every hit on the Leaflet map with hover-preview of the frame, a full-screen expanded detections panel, and transient toast notifications.
+- **Edge-Driven Architecture**: Drones join the hub natively via WebSockets and push their own telemetry and video; no manual pre-registration, no server-side RTSP pull.
+- **Server-Side Path Allocation**: Dynamic zigzag/sweep sector assignment across the swarm, recomputed whenever a drone joins or leaves to preserve non-overlapping coverage.
+- **Real-time Telemetry**: 20 Hz edge-side sampling, 1 Hz dashboard fan-out via `/ws/drones`.
+- **Live Swarm Video**: Every connected drone renders as an MJPEG tile; any tile opens full-screen in the same lightbox used for detection frames.
+- **Multi-drone Coordination**: Tested concurrent fleets with sub-100 ms command latency inside the edge stack.
+- **Cross-platform Integration**: Compatible with standard DJI RC platforms, a Python mock RC (`mock_remote.py`), and the direct-HTTP Python / ROS 2 clients under `GroundStation/`.
 
 ## Supported Hardware
 
@@ -244,43 +244,53 @@ graph TD
 #### 1. Setup Environment
 ```bash
 cd GroundStation/WebServer
-python -m venv venv
-venv\Scripts\activate  # Windows
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1   # Windows PowerShell (bash: source .venv/bin/activate)
 pip install -r requirements.txt
 ```
-*Note: GPU support (CUDA) is highly recommended for SAM 3.1 inference.*
+*Note: a CUDA GPU is strongly recommended for SAM 3.1. `--cpu` works for dev but runs seconds per frame.*
 
 #### 2. Run the Hub
 ```bash
 python -m app
 ```
 *Flags:*
-- `--test`: Uses small 5x5m target areas for simulated flight testing.
-- `--no-vision`: Disables the SAM 3.1 VisionDaemon (saves VRAM).
+- `--host HOST` / `--port PORT` — bind address (default `127.0.0.1:8000`).
+- `--test` — small 5×5 m patrol paths at 10 m altitude for flight simulations.
+- `--cpu` — force SAM onto CPU instead of CUDA GPU 0.
+
+The hub is entirely in-memory; there's no registry file and drones don't need pre-registering. Any running edge client will auto-join.
 
 #### 3. Simulated Multi-Drone Testing
-Use our mock client to launch multiple simulated drones from different "launch sites":
-```bash
-# Launch Drone 1 (Near starting point A)
-python -m client.mock_remote --id drone-alpha --cam-folder ./mock_images/forest/
+The architecture is edge-driven — drones *push* telemetry and video to the hub — so each simulated drone needs three processes. For one drone:
 
-# Launch Drone 2 (Near starting point B)
-python -m client.mock_remote --id drone-beta --cam-folder ./mock_images/meadow/
+```bash
+# Terminal 1 — the hub
+python -m app
+
+# Terminal 2 — fake a DJI RC locally on ports 8082/8083
+python client/mock_remote.py --port-http 8082 --port-tcp 8083 --lat 46.0569 --lng 14.5058
+
+# Terminal 3 — the edge agent that bridges the fake RC ↔ hub
+python client/aegis_client.py --ip 127.0.0.1 --port-http 8082 --port-tcp 8083
 ```
+
+For a second simulated drone, run a second `mock_remote.py` on different ports (e.g. `--port-http 8084 --port-tcp 8085 --lat ...`) and a second `aegis_client.py` pointed at it. Each mock grabs the local webcam for video; pass `--image-folder <dir>` on subsequent mocks to sidestep the camera-device lock.
 
 ### Dashboard Endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/` | Main Swarm Dashboard (MAP + VIDEO + AI) |
-| GET | `/api/drones` | List all active drones and their current telemetry |
-| POST | `/api/prompt` | Set the Master Tracking Prompt for SAM 3.1 |
-| WS | `/ws/drones` | 1Hz broadcast of swarm state and AI alerts to UI |
-| WS | `/ws/swarm/{id}` | Edge client connection (Bi-directional telemetry & paths) |
-| POST | `/api/swarm/{id}/video` | Raw JPEG ingest from edge cameras |
-| GET | `/api/swarm/{id}/video.mjpg` | Swarm-wide MJPEG video stream for dashboard tiles |
-| GET | `/cameras` | Dedicated Camera Wall (Grid view of all feeds) |
-| GET | `/video?drone={id}` | Full-screen standalone video feed |
+| GET | `/` | Single-page swarm dashboard (map, live camera tiles, detection panel, lightbox, toasts) |
+| GET | `/api/health` | Hub liveness + active-drone count |
+| GET | `/api/drones` | All drone telemetry snapshots |
+| POST | `/api/prompt` | `{prompt}` — set the master SAM 3.1 tracking prompt |
+| GET | `/api/detections` | All detection metadata (append-only history, cap 1000) |
+| GET | `/api/detections/{id}/image.jpg` | SAM-overlaid JPEG for the detection; 404 once evicted (latest 50 retained) |
+| WS | `/ws/drones` | 1 Hz fan-out of telemetry snapshots + new-detection alerts to the dashboard |
+| WS | `/ws/swarm/{uuid}` | Edge-client bidirectional channel: join, telemetry, path updates |
+| POST | `/api/swarm/{uuid}/video` | Edge-client raw JPEG ingest |
+| GET | `/api/swarm/{uuid}/video.mjpg` | Dashboard-facing MJPEG re-stream for tile grid + fullscreen lightbox |
 
 ---
 

@@ -131,19 +131,22 @@
   /* ── Notifications ── */
   .notif-badge {
     background: var(--warn); color: #000;
-    border-radius: 999px; font-size: 9px; font-weight: 700; padding: 1px 5px;
+    border-radius: 999px; font-size: 10px; font-weight: 700; padding: 1px 6px;
   }
   .notif-badge:empty { display: none; }
-  .notif-empty { font-size: 11px; color: var(--muted); padding: 4px 0 2px; }
-  .notif-list { list-style: none; margin: 0; padding: 0; max-height: 200px; overflow-y: auto; }
+  .notif-empty { font-size: 13px; color: var(--muted); padding: 6px 0 4px; }
+  .notif-list { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow-y: auto; }
   .notif-item {
-    padding: 5px 0; border-top: 1px solid var(--border-s);
-    display: flex; gap: 8px; align-items: baseline; font-size: 11px;
+    padding: 8px 6px; border-top: 1px solid var(--border-s);
+    display: flex; gap: 10px; align-items: baseline; font-size: 14px;
+    cursor: pointer; border-radius: 4px;
+    transition: background 0.12s;
   }
+  .notif-item:hover { background: var(--panel-2); }
   .notif-item:first-child { border-top: none; }
-  .notif-ts { color: var(--muted-2); flex-shrink: 0; font-family: var(--mono); font-size: 10px; }
-  .notif-drone { color: var(--blue); font-weight: 600; flex-shrink: 0; }
-  .notif-text { flex: 1; color: var(--text); }
+  .notif-ts { color: var(--muted-2); flex-shrink: 0; font-family: var(--mono); font-size: 12px; }
+  .notif-drone { color: var(--blue); font-weight: 700; flex-shrink: 0; font-size: 14px; }
+  .notif-text { flex: 1; color: var(--text); font-size: 14px; }
   .notif-item.is-warn .notif-text { color: var(--warn); }
   .notif-item.is-alert .notif-text { color: var(--danger); font-weight: 600; }
 
@@ -237,6 +240,77 @@
     color: var(--text); user-select: none;
   }
   .det-card-coords { color: var(--muted); font-family: var(--mono); font-size: 10px; margin-left: auto; }
+
+  /* ── Shared fullscreen lightbox (detections + live stream) ── */
+  #lightbox {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.94);
+    display: none;
+    z-index: 9999;
+    align-items: center; justify-content: center;
+    padding: 40px 40px 60px;
+  }
+  #lightbox.is-open { display: flex; }
+  #lightbox-close {
+    position: absolute; top: 18px; right: 24px;
+    background: rgba(30,37,56,0.9); color: var(--text);
+    border: 1px solid var(--border); border-radius: 5px;
+    padding: 7px 14px; font-size: 14px; cursor: pointer;
+    font-family: inherit;
+  }
+  #lightbox-close:hover { border-color: var(--accent); color: var(--accent); }
+  .lightbox-inner {
+    display: flex; flex-direction: column; gap: 14px; align-items: center;
+    max-width: 100%; max-height: 100%;
+  }
+  #lightbox-img {
+    max-width: 100%; max-height: calc(100vh - 130px);
+    object-fit: contain;
+    border-radius: 6px; box-shadow: 0 10px 40px rgba(0,0,0,0.8);
+    background: #060810;
+  }
+  #lightbox-caption {
+    color: var(--text); font-size: 14px; letter-spacing: 0.04em;
+    text-align: center; max-width: 900px;
+  }
+
+  /* ── Toast stack (bottom-right) ── */
+  #toast-stack {
+    position: fixed; bottom: 24px; right: 24px;
+    z-index: 10000;
+    display: flex; flex-direction: column; gap: 8px;
+    pointer-events: none;
+    max-width: 340px;
+  }
+  .toast {
+    background: rgba(20,26,40,0.97); color: var(--text);
+    border: 1px solid var(--border); border-left: 3px solid var(--danger);
+    border-radius: 6px; padding: 10px 14px;
+    font-size: 13px; line-height: 1.45;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+    opacity: 0; transform: translateY(12px);
+    transition: opacity 0.22s ease, transform 0.22s ease;
+    pointer-events: auto;
+  }
+  .toast.is-visible { opacity: 1; transform: translateY(0); }
+  .toast-drone { color: var(--blue); font-weight: 700; margin-right: 8px; }
+  .toast-text  { color: var(--text); }
+
+  /* ── Map marker hover preview (detection tooltip) ── */
+  .det-preview-tooltip {
+    background: rgba(20,26,40,0.97); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px; box-shadow: 0 6px 20px rgba(0,0,0,0.6);
+    opacity: 1 !important;
+  }
+  .det-preview-tooltip::before { display: none; }   /* hide Leaflet's arrow */
+  .det-tip-img {
+    display: block; width: 220px; height: 124px;
+    object-fit: cover; border-radius: 3px; margin-bottom: 5px;
+    background: #060810;
+  }
+  .det-tip-prompt { color: var(--text); font-size: 12px; font-weight: 600; }
+  .det-tip-drone { color: var(--blue); font-size: 11px; margin-top: 2px; }
 
   /* ── Register button ── */
   #btn-register {
@@ -475,6 +549,18 @@
   <!-- ── Map (2/3) ── -->
   <div id="map"></div>
 
+  <!-- ── Transient toasts (bottom-right) ── -->
+  <div id="toast-stack" aria-live="polite" aria-atomic="false"></div>
+
+  <!-- ── Fullscreen lightbox (shared: detection frames + live streams) ── -->
+  <div id="lightbox" role="dialog" aria-modal="true" aria-hidden="true">
+    <button id="lightbox-close" type="button" aria-label="Close (Esc)">Close ✕</button>
+    <div class="lightbox-inner">
+      <img id="lightbox-img" alt="">
+      <div id="lightbox-caption"></div>
+    </div>
+  </div>
+
   <!-- ── Expanded detections panel (takes the map slot when open) ── -->
   <section id="detections-panel">
     <header class="det-panel-head">
@@ -685,13 +771,19 @@ function renderList() {
     del.addEventListener('click', (e) => { e.stopPropagation(); deleteDrone(d.sourceId); });
     tile.appendChild(del);
 
-    // Expand link → camera wall (top-right)
-    const exp = document.createElement('a');
+    // Expand → open this drone's live stream full-screen in the lightbox.
+    const exp = document.createElement('button');
+    exp.type = 'button';
     exp.className = 'cam-expand';
-    exp.href = '/cameras';
-    exp.title = 'Open camera wall';
+    exp.title = 'Expand live feed';
     exp.textContent = '⛶';
-    exp.addEventListener('click', (e) => e.stopPropagation());
+    exp.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openLightbox(
+        `/api/swarm/${encodeURIComponent(d.sourceId)}/video.mjpg?t=${Date.now()}`,
+        `Live — ${d.label}`
+      );
+    });
     tile.appendChild(exp);
 
     const lbl = document.createElement('div');
@@ -742,8 +834,10 @@ initToggle('drones-toggle', 'drones-body', renderCameras);
 let unread = 0;
 const detectionsById = new Map();     // det.id → det (metadata only, client cache)
 const detectionMarkers = new Map();   // det.id → L.circleMarker (pins on the map)
-const PINNED_KEY = 'argus:pinned-detections';
-const pinnedIds = new Set(JSON.parse(localStorage.getItem(PINNED_KEY) || '[]'));
+// Auto-pin is the default. `unpinnedIds` tracks detections the operator
+// explicitly unpinned in this session so that re-bootstraps (polling fallback,
+// panel open) don't resurrect them. In-memory only — cleared on page refresh.
+const unpinnedIds = new Set();
 
 // Dedicated pane so detection pins sit above paths.
 map.createPane('detectionsPane');
@@ -754,9 +848,26 @@ function fmtTime(tsMs) {
   return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
-function addDetection(det) {
+function showToast(det) {
+  const stack = document.getElementById('toast-stack');
+  if (!stack) return;
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.innerHTML =
+    `<span class="toast-drone">${esc(det.droneLabel || det.droneId)}</span>` +
+    `<span class="toast-text">${esc(det.prompt)}</span>`;
+  stack.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('is-visible'));
+  setTimeout(() => {
+    el.classList.remove('is-visible');
+    setTimeout(() => el.remove(), 260);
+  }, 2000);
+}
+
+function addDetection(det, opts) {
   if (!det || !det.id || detectionsById.has(det.id)) return;
   detectionsById.set(det.id, det);
+  if (!opts || !opts.silent) showToast(det);
 
   // Compact list row.
   const empty = document.getElementById('notif-empty');
@@ -779,11 +890,12 @@ function addDetection(det) {
     badge.textContent = unread > 9 ? '9+' : String(unread);
   }
 
-  // Append to the expanded panel if it's open, and restore any pin.
+  // Append to the expanded panel if it's open.
   if (document.getElementById('detections-panel').classList.contains('is-open')) {
     prependDetCard(det);
   }
-  if (pinnedIds.has(det.id)) {
+  // Auto-pin on the map unless the operator explicitly unpinned it earlier.
+  if (!unpinnedIds.has(det.id)) {
     pinDetection(det);
   }
 }
@@ -799,7 +911,7 @@ async function bootstrapDetections() {
     const data = await res.json();
     // Oldest first → newest ends up at the top of the list via prepends.
     const sorted = (data.detections || []).slice().sort((a, b) => a.ts - b.ts);
-    for (const d of sorted) addDetection(d);
+    for (const d of sorted) addDetection(d, { silent: true });
   } catch (_) { /* ignore; WS will fill in */ }
 }
 
@@ -858,7 +970,7 @@ function buildDetCard(det) {
   const labelEl = document.createElement('label');
   const cb = document.createElement('input');
   cb.type = 'checkbox';
-  cb.checked = pinnedIds.has(det.id);
+  cb.checked = detectionMarkers.has(det.id);
   cb.addEventListener('change', () => {
     if (cb.checked) pinDetection(det); else unpinDetection(det.id);
   });
@@ -882,18 +994,76 @@ function pinDetection(det) {
     radius: 7, color: '#fff', weight: 2,
     fillColor: '#f85149', fillOpacity: 1,
   }).addTo(map);
-  marker.bindTooltip(`${det.prompt} — ${det.droneLabel || det.droneId}`, { direction: 'top', offset: [0, -6] });
+
+  // Rich hover tooltip with a small frame preview. Leaflet renders tooltips
+  // lazily, so the <img> isn't fetched until the operator hovers the marker.
+  const label = esc(det.droneLabel || det.droneId);
+  const prompt = esc(det.prompt);
+  const imgHtml = det.has_image
+    ? `<img class="det-tip-img" src="/api/detections/${encodeURIComponent(det.id)}/image.jpg" alt="">`
+    : '';
+  marker.bindTooltip(
+    `${imgHtml}<div class="det-tip-prompt">${prompt}</div><div class="det-tip-drone">${label}</div>`,
+    { direction: 'top', offset: [0, -8], className: 'det-preview-tooltip', sticky: true, opacity: 1 }
+  );
+  // Clicking a marker opens the full-screen frame.
+  marker.on('click', () => {
+    if (det.has_image) {
+      openLightbox(`/api/detections/${encodeURIComponent(det.id)}/image.jpg`,
+                   `${det.droneLabel || det.droneId} — ${det.prompt}`);
+    }
+  });
+
   detectionMarkers.set(det.id, marker);
-  pinnedIds.add(det.id);
-  localStorage.setItem(PINNED_KEY, JSON.stringify([...pinnedIds]));
+  unpinnedIds.delete(det.id);
 }
 
 function unpinDetection(detId) {
   const marker = detectionMarkers.get(detId);
   if (marker) { map.removeLayer(marker); detectionMarkers.delete(detId); }
-  pinnedIds.delete(detId);
-  localStorage.setItem(PINNED_KEY, JSON.stringify([...pinnedIds]));
+  unpinnedIds.add(detId);
 }
+
+// ── Fullscreen lightbox ──────────────────────────────────────────────────
+const lightboxEl = document.getElementById('lightbox');
+const lightboxImg = document.getElementById('lightbox-img');
+const lightboxCap = document.getElementById('lightbox-caption');
+
+function openLightbox(src, caption) {
+  lightboxImg.src = src;
+  lightboxCap.textContent = caption || '';
+  lightboxEl.classList.add('is-open');
+  lightboxEl.setAttribute('aria-hidden', 'false');
+}
+function closeLightbox() {
+  lightboxEl.classList.remove('is-open');
+  lightboxEl.setAttribute('aria-hidden', 'true');
+  // Unset src so MJPEG streams actually stop (the browser keeps them alive
+  // on display:none otherwise).
+  lightboxImg.src = '';
+}
+lightboxEl.addEventListener('click', (e) => {
+  // Backdrop click closes; clicks on the image/caption don't.
+  if (e.target === lightboxEl) closeLightbox();
+});
+document.getElementById('lightbox-close').addEventListener('click', closeLightbox);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && lightboxEl.classList.contains('is-open')) closeLightbox();
+});
+
+// Notification row → open the detection's frame full-screen.
+document.getElementById('notif-list').addEventListener('click', (e) => {
+  const li = e.target.closest('.notif-item');
+  if (!li) return;
+  const det = detectionsById.get(li.dataset.detId);
+  if (!det) return;
+  if (det.has_image) {
+    openLightbox(
+      `/api/detections/${encodeURIComponent(det.id)}/image.jpg`,
+      `${det.droneLabel || det.droneId} — ${det.prompt}`
+    );
+  }
+});
 
 async function openDetectionsPanel() {
   // Pick up anything that landed since the last bootstrap (server may have
