@@ -3,9 +3,20 @@
 <head>
 <meta charset="UTF-8" />
 <title>ARGUS Hub</title>
+<!-- Apply the persisted theme BEFORE stylesheet paints to avoid a flash.
+     Kept tiny & inline so the first paint already has the right palette. -->
+<script>
+  (function () {
+    var stored = null;
+    try { stored = localStorage.getItem('argus-theme'); } catch (_) {}
+    var theme = stored || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    document.documentElement.dataset.theme = theme;
+  })();
+</script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
   :root {
+    /* Dark palette — applied by default and when data-theme="dark". */
     --bg:       #0d1117;
     --panel:    #161b27;
     --panel-2:  #1e2538;
@@ -20,7 +31,32 @@
     --blue:     #60a5fa;
     --danger:   #f85149;
     --warn:     #f59e0b;
+    --accent-glow: rgba(59,130,246,0.35);
+    --accent-glow-soft: rgba(59,130,246,0.12);
+    --toast-bg: rgba(20,26,40,0.97);
+    --map-tile-filter: grayscale(20%) brightness(0.88) contrast(1.05);
     --mono:     ui-monospace, 'JetBrains Mono', 'Cascadia Code', monospace;
+  }
+  :root[data-theme="light"] {
+    /* Light palette — inverted surfaces while keeping accent hue consistent. */
+    --bg:       #eef2f8;
+    --panel:    #ffffff;
+    --panel-2:  #f5f8fd;
+    --panel-3:  #e9eff7;
+    --border:   #d1d9e4;
+    --border-s: rgba(140,160,190,0.28);
+    --text:     #1a2332;
+    --muted:    #5a7590;
+    --muted-2:  #8fa5bc;
+    --accent:   #2563eb;
+    --accent-h: #1d4ed8;
+    --blue:     #1d4ed8;
+    --danger:   #dc2626;
+    --warn:     #b45309;
+    --accent-glow: rgba(37,99,235,0.18);
+    --accent-glow-soft: rgba(37,99,235,0.08);
+    --toast-bg: rgba(255,255,255,0.97);
+    --map-tile-filter: none;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -41,7 +77,7 @@
 
   /* ── Map ── */
   #map { height: 100%; background: #c9ced3; }
-  #map .leaflet-tile-pane { filter: grayscale(20%) brightness(0.88) contrast(1.05); }
+  #map .leaflet-tile-pane { filter: var(--map-tile-filter); }
   #map.placement-arm,
   #map.placement-arm .leaflet-grab { cursor: crosshair; }
 
@@ -56,7 +92,7 @@
   #side > header {
     padding: 14px 18px 13px;
     border-bottom: 1px solid var(--border);
-    background: linear-gradient(180deg, rgba(59,130,246,0.06) 0%, transparent 100%);
+    background: linear-gradient(180deg, var(--accent-glow-soft) 0%, transparent 100%);
     flex-shrink: 0;
     position: relative;
   }
@@ -67,11 +103,24 @@
     opacity: 0.4;
   }
   .brand-row { display: flex; align-items: center; gap: 11px; }
-  .brand-logo { height: 46px; width: auto; filter: drop-shadow(0 0 8px rgba(59,130,246,0.35)); }
+  .brand-row .brand-spacer { flex: 1; }
+
+  /* ── Theme toggle (header top-right) ── */
+  #theme-toggle {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 9px;
+    font-size: 14px; line-height: 1; cursor: pointer;
+    font-family: inherit;
+    transition: border-color 0.15s, color 0.15s, background 0.15s, transform 0.1s;
+  }
+  #theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
+  #theme-toggle:active { transform: scale(0.95); }
+  .brand-logo { height: 46px; width: auto; filter: drop-shadow(0 0 8px var(--accent-glow)); }
   .brand-name {
     font-size: 15px; font-weight: 700; letter-spacing: 4px; text-transform: uppercase;
     color: var(--text);
-    text-shadow: 0 0 20px rgba(59,130,246,0.25);
+    text-shadow: 0 0 20px var(--accent-glow-soft);
   }
   .brand-sub { font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted-2); margin-top: 1px; }
 
@@ -232,12 +281,16 @@
   .det-card-image img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .det-card-foot {
     padding: 8px 12px;
-    display: flex; align-items: center; gap: 8px; font-size: 11px;
-    border-top: 1px solid var(--border-s);
+    display: flex; align-items: center; gap: 12px; font-size: 11px;
+    border-top: 1px solid var(--border-s); flex-wrap: wrap;
   }
   .det-card-foot label {
     display: flex; align-items: center; gap: 6px; cursor: pointer;
     color: var(--text); user-select: none;
+  }
+  /* Per-card description output — lives under the foot so it spans full card width. */
+  .det-card > .desc-result {
+    margin: 0 12px 10px;
   }
   .det-card-coords { color: var(--muted); font-family: var(--mono); font-size: 10px; margin-left: auto; }
 
@@ -273,6 +326,33 @@
     color: var(--text); font-size: 14px; letter-spacing: 0.04em;
     text-align: center; max-width: 900px;
   }
+
+  /* ── Description (Gemini) block — shown inside the lightbox for detection frames
+        and inline on the expanded detection cards. Uses the same CSS class. ── */
+  .desc-block {
+    display: flex; flex-direction: column; gap: 6px;
+    font-size: 13px; color: var(--text);
+    max-width: 900px;
+  }
+  .desc-block label {
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--text); user-select: none; cursor: pointer;
+  }
+  .desc-result { display: none; padding: 8px 10px;
+    background: var(--panel-2); border: 1px solid var(--border-s); border-radius: 6px;
+    line-height: 1.45;
+  }
+  .desc-result.is-visible { display: block; }
+  .desc-result.is-loading { font-style: italic; color: var(--muted); }
+  .desc-text { color: var(--text); }
+  .desc-confidence {
+    display: inline-block; margin-left: 8px;
+    padding: 1px 7px; border-radius: 999px;
+    font-size: 11px; font-weight: 700; vertical-align: middle;
+  }
+  .desc-confidence.is-high { background: rgba(63,185,80,0.18); color: #3fb950; }
+  .desc-confidence.is-mid  { background: rgba(245,158,11,0.22); color: var(--warn); }
+  .desc-confidence.is-low  { background: rgba(248,81,73,0.18);  color: var(--danger); }
 
   /* ── Toast stack (bottom-right) ── */
   #toast-stack {
@@ -499,6 +579,8 @@
           <div class="brand-name">ARGUS</div>
           <div class="brand-sub">Multi-Drone Operations</div>
         </div>
+        <div class="brand-spacer"></div>
+        <button id="theme-toggle" type="button" aria-label="Toggle theme" title="Toggle light/dark theme">☾</button>
       </div>
     </header>
 
@@ -558,6 +640,14 @@
     <div class="lightbox-inner">
       <img id="lightbox-img" alt="">
       <div id="lightbox-caption"></div>
+      <!-- Shown only when the lightbox was opened for a detection (not a live stream). -->
+      <div id="lightbox-desc" class="desc-block" style="display:none;">
+        <label>
+          <input type="checkbox" id="lightbox-desc-check">
+          <span>Description (Gemini)</span>
+        </label>
+        <div id="lightbox-desc-result" class="desc-result"></div>
+      </div>
     </div>
   </div>
 
@@ -978,12 +1068,28 @@ function buildDetCard(det) {
   labelEl.appendChild(document.createTextNode(' Pin to map'));
   foot.appendChild(labelEl);
 
+  // Description (Gemini) checkbox — identical UX to the lightbox, scoped to this card.
+  const descLabel = document.createElement('label');
+  const descCb = document.createElement('input');
+  descCb.type = 'checkbox';
+  const descResult = document.createElement('div');
+  descResult.className = 'desc-result';
+  descCb.addEventListener('change', () => {
+    if (descCb.checked) fetchDescription(det.id, descResult);
+    else descResult.classList.remove('is-visible', 'is-loading');
+  });
+  descLabel.appendChild(descCb);
+  descLabel.appendChild(document.createTextNode(' Description'));
+  foot.appendChild(descLabel);
+
   const coords = document.createElement('span');
   coords.className = 'det-card-coords';
   coords.textContent = `${det.lat.toFixed(5)}, ${det.lng.toFixed(5)}`;
   foot.appendChild(coords);
 
   card.appendChild(foot);
+  // Attach the description output area AFTER the foot so it spans the whole card width.
+  card.appendChild(descResult);
   return card;
 }
 
@@ -1010,7 +1116,8 @@ function pinDetection(det) {
   marker.on('click', () => {
     if (det.has_image) {
       openLightbox(`/api/detections/${encodeURIComponent(det.id)}/image.jpg`,
-                   `${det.droneLabel || det.droneId} — ${det.prompt}`);
+                   `${det.droneLabel || det.droneId} — ${det.prompt}`,
+                   det.id);
     }
   });
 
@@ -1024,16 +1131,60 @@ function unpinDetection(detId) {
   unpinnedIds.add(detId);
 }
 
+// ── Description (Gemini) — shared fetcher + renderer ────────────────────
+// Fetches /api/detections/{id}/describe, caches the result on the in-memory
+// detection object, and renders into the supplied container element.
+function renderDescription(result, container) {
+  const c = Math.max(0, Math.min(100, Number(result.confidence) || 0));
+  const cls = c >= 70 ? 'is-high' : c >= 40 ? 'is-mid' : 'is-low';
+  container.innerHTML =
+    `<span class="desc-text">${esc(result.description)}</span>` +
+    `<span class="desc-confidence ${cls}">${c}%</span>`;
+  container.classList.add('is-visible');
+  container.classList.remove('is-loading');
+}
+
+async function fetchDescription(detId, container) {
+  const det = detectionsById.get(detId);
+  if (det && det.description !== undefined) {
+    renderDescription({description: det.description, confidence: det.confidence}, container);
+    return;
+  }
+  container.textContent = 'Asking Gemini…';
+  container.classList.add('is-visible', 'is-loading');
+  try {
+    const res = await fetch(`/api/detections/${encodeURIComponent(detId)}/describe`, {method: 'POST'});
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (det) { det.description = data.description; det.confidence = data.confidence; }
+    renderDescription(data, container);
+  } catch (e) {
+    container.textContent = `Description failed: ${e.message}`;
+    container.classList.remove('is-loading');
+  }
+}
+
 // ── Fullscreen lightbox ──────────────────────────────────────────────────
 const lightboxEl = document.getElementById('lightbox');
 const lightboxImg = document.getElementById('lightbox-img');
 const lightboxCap = document.getElementById('lightbox-caption');
+const lightboxDescWrap = document.getElementById('lightbox-desc');
+const lightboxDescCheck = document.getElementById('lightbox-desc-check');
+const lightboxDescResult = document.getElementById('lightbox-desc-result');
+let lightboxDetId = null;
 
-function openLightbox(src, caption) {
+function openLightbox(src, caption, detectionId) {
   lightboxImg.src = src;
   lightboxCap.textContent = caption || '';
   lightboxEl.classList.add('is-open');
   lightboxEl.setAttribute('aria-hidden', 'false');
+
+  // Reset + show/hide the description controls based on whether this is a detection.
+  lightboxDetId = detectionId || null;
+  lightboxDescCheck.checked = false;
+  lightboxDescResult.className = 'desc-result';
+  lightboxDescResult.textContent = '';
+  lightboxDescWrap.style.display = lightboxDetId ? '' : 'none';
 }
 function closeLightbox() {
   lightboxEl.classList.remove('is-open');
@@ -1041,7 +1192,17 @@ function closeLightbox() {
   // Unset src so MJPEG streams actually stop (the browser keeps them alive
   // on display:none otherwise).
   lightboxImg.src = '';
+  lightboxDetId = null;
 }
+
+lightboxDescCheck.addEventListener('change', () => {
+  if (!lightboxDetId) return;
+  if (lightboxDescCheck.checked) {
+    fetchDescription(lightboxDetId, lightboxDescResult);
+  } else {
+    lightboxDescResult.classList.remove('is-visible', 'is-loading');
+  }
+});
 lightboxEl.addEventListener('click', (e) => {
   // Backdrop click closes; clicks on the image/caption don't.
   if (e.target === lightboxEl) closeLightbox();
@@ -1060,7 +1221,8 @@ document.getElementById('notif-list').addEventListener('click', (e) => {
   if (det.has_image) {
     openLightbox(
       `/api/detections/${encodeURIComponent(det.id)}/image.jpg`,
-      `${det.droneLabel || det.droneId} — ${det.prompt}`
+      `${det.droneLabel || det.droneId} — ${det.prompt}`,
+      det.id
     );
   }
 });
@@ -1087,6 +1249,26 @@ document.getElementById('notif-expand').addEventListener('click', (e) => {
   openDetectionsPanel();
 });
 document.getElementById('det-close').addEventListener('click', closeDetectionsPanel);
+
+// ── Theme toggle ─────────────────────────────────────────────────────────
+// Initial attribute was already set by the tiny inline script in <head> to prevent
+// FOUC; this just wires the button + keeps the glyph in sync.
+(function () {
+  const btn = document.getElementById('theme-toggle');
+  const root = document.documentElement;
+  function paintButton() {
+    // Sun when we'd switch to dark, moon when we'd switch to light — glyph shows the
+    // *destination* of the toggle, which matches most OS conventions.
+    btn.textContent = root.dataset.theme === 'light' ? '☾' : '☀';
+  }
+  paintButton();
+  btn.addEventListener('click', () => {
+    const next = root.dataset.theme === 'light' ? 'dark' : 'light';
+    root.dataset.theme = next;
+    try { localStorage.setItem('argus-theme', next); } catch (_) {}
+    paintButton();
+  });
+})();
 
 // ── Prompt dispatch ───────────────────────────────────────────────────────
 document.getElementById('btn-dispatch').addEventListener('click', () => {

@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .config import log_startup_status
 from .registry import DroneRegistry
 from .routes import router
 from .vision import VisionDaemon
@@ -22,6 +23,7 @@ def create_app(registry: DroneRegistry, device: str = "0") -> FastAPI:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    log_startup_status()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

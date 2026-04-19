@@ -143,6 +143,16 @@ class VisionDaemon:
                             except Exception as enc_exc:
                                 log.warning(f"VisionDaemon: failed to encode annotated frame for {drone_id}: {enc_exc}")
 
+                            # Also keep the raw (pre-plot) frame — fed to Gemini later for a
+                            # description that isn't biased by SAM's mask/box overlay.
+                            raw_jpeg_bytes = None
+                            try:
+                                ok_raw, buf_raw = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+                                if ok_raw:
+                                    raw_jpeg_bytes = buf_raw.tobytes()
+                            except Exception as enc_exc:
+                                log.warning(f"VisionDaemon: failed to encode raw frame for {drone_id}: {enc_exc}")
+
                             # Snapshot GPS at detection time; fall back through telemetry → homeLocation.
                             loc = (drone_raw.get("telemetry") or {}).get("location") or {}
                             lat = loc.get("latitude", loc.get("lat"))
@@ -160,6 +170,7 @@ class VisionDaemon:
                                 lat=float(lat),
                                 lng=float(lng),
                                 jpeg_bytes=jpeg_bytes,
+                                raw_jpeg_bytes=raw_jpeg_bytes,
                             )
                             # Add a brief pause to stop console spamming during lock
                             time.sleep(1.0)

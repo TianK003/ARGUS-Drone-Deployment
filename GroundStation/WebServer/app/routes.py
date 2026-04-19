@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from .registry import DroneRegistry
 from .pathing import compute_paths
+from .gemini import describe_detection
 
 log = logging.getLogger(__name__)
 
@@ -103,6 +104,40 @@ def get_detection_image(det_id: str, request: Request):
     if img is None:
         raise HTTPException(status_code=404, detail="image evicted or unknown detection")
     return Response(content=img, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+@router.get("/api/detections/{det_id}/raw_image.jpg")
+def get_detection_raw_image(det_id: str, request: Request):
+    """Un-annotated (pre-SAM-overlay) JPEG. Same FIFO cap as the annotated variant.
+    Fed to Gemini for description so the model doesn't see SAM's colored mask."""
+    img = _registry(request).get_raw_detection_image(det_id)
+    if img is None:
+        raise HTTPException(status_code=404, detail="raw image evicted or unknown detection")
+    return Response(content=img, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+@router.post("/api/detections/{det_id}/describe")
+def describe_detection_endpoint(det_id: str, request: Request):
+    """Return a Gemini-generated short description of the detection subject plus a
+    confidence 0-100. Cached per detection id — subsequent calls don't hit Gemini."""
+    reg = _registry(request)
+
+    cached = reg.get_detection_description(det_id)
+    if cached is not None:
+        return {"description": cached["description"], "confidence": cached["confidence"], "cached": True}
+
+    raw = reg.get_raw_detection_image(det_id)
+    if raw is None:
+        raise HTTPException(status_code=404, detail="raw image evicted or unknown detection")
+
+    # Find the SAM prompt this detection was triggered by.
+    sam_prompt = ""
+    for det in reg.list_detections():
+        if det["id"] == det_id:
+            sam_prompt = det.get("prompt", "") or ""
+            break
+
+    description, confidence = describe_detection(raw, sam_prompt)
+    reg.set_detection_description(det_id, description, confidence)
+    return {"description": description, "confidence": confidence, "cached": False}
 
 swarm_sockets: Dict[str, WebSocket] = {}
 

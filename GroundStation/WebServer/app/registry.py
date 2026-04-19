@@ -25,7 +25,14 @@ class DroneRegistry:
         self._drones: Dict[str, dict] = {}
         self._alerts: List[dict] = []
         self._detections: List[dict] = []
+        # Annotated JPEG (SAM mask+box overlay) — what the dashboard shows by default.
         self._detection_images: "OrderedDict[str, bytes]" = OrderedDict()
+        # Un-annotated JPEG captured at the same instant — sent to Gemini for description.
+        # FIFO cap mirrors _detection_images so they evict in lockstep.
+        self._detection_raw_images: "OrderedDict[str, bytes]" = OrderedDict()
+        # Cached Gemini response per detection id: {"description": str, "confidence": int}.
+        # Entries die with their detection metadata (no independent cap).
+        self._detection_descriptions: Dict[str, dict] = {}
 
     def push_alert(self, alert: dict):
         with self._lock:
@@ -48,6 +55,7 @@ class DroneRegistry:
         lat: float,
         lng: float,
         jpeg_bytes: Optional[bytes],
+        raw_jpeg_bytes: Optional[bytes] = None,
     ) -> dict:
         det_id = f"det-{uuid.uuid4().hex[:8]}"
         payload = {
@@ -59,6 +67,7 @@ class DroneRegistry:
             "lat": lat,
             "lng": lng,
             "has_image": bool(jpeg_bytes),
+            "has_raw_image": bool(raw_jpeg_bytes),
         }
         with self._lock:
             self._detections.append(payload)
@@ -72,10 +81,21 @@ class DroneRegistry:
                             entry["has_image"] = False
                             break
 
+            if raw_jpeg_bytes:
+                self._detection_raw_images[det_id] = raw_jpeg_bytes
+                while len(self._detection_raw_images) > DETECTION_IMAGE_CAP:
+                    evicted_id, _ = self._detection_raw_images.popitem(last=False)
+                    for entry in self._detections:
+                        if entry["id"] == evicted_id:
+                            entry["has_raw_image"] = False
+                            break
+
             # Defensive: cap total metadata to avoid OOM on runaway prompts.
             while len(self._detections) > DETECTION_META_CAP:
                 old = self._detections.pop(0)
                 self._detection_images.pop(old["id"], None)
+                self._detection_raw_images.pop(old["id"], None)
+                self._detection_descriptions.pop(old["id"], None)
 
             self._alerts.append(payload)
         return payload
@@ -87,6 +107,29 @@ class DroneRegistry:
     def get_detection_image(self, det_id: str) -> Optional[bytes]:
         with self._lock:
             return self._detection_images.get(det_id)
+
+    def get_raw_detection_image(self, det_id: str) -> Optional[bytes]:
+        with self._lock:
+            return self._detection_raw_images.get(det_id)
+
+    def get_detection_description(self, det_id: str) -> Optional[dict]:
+        """Returns the cached Gemini description dict or None if never fetched."""
+        with self._lock:
+            entry = self._detection_descriptions.get(det_id)
+            return entry.copy() if entry else None
+
+    def set_detection_description(self, det_id: str, description: str, confidence: int) -> dict:
+        """Cache a Gemini response for this detection id so repeat fetches are free."""
+        entry = {"description": description, "confidence": int(confidence)}
+        with self._lock:
+            self._detection_descriptions[det_id] = entry
+            # Also stamp it on the detection metadata for dashboards that poll /api/detections.
+            for det in self._detections:
+                if det["id"] == det_id:
+                    det["description"] = description
+                    det["confidence"] = int(confidence)
+                    break
+        return entry.copy()
 
     def add_or_update(self, drone_id: str, data: dict) -> dict:
         with self._lock:
