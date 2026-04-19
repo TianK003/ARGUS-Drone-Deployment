@@ -14,6 +14,7 @@
   })();
 </script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
 <style>
   :root {
     /* Dark palette — applied by default and when data-theme="dark". */
@@ -38,24 +39,26 @@
     --mono:     ui-monospace, 'JetBrains Mono', 'Cascadia Code', monospace;
   }
   :root[data-theme="light"] {
-    /* Light palette — inverted surfaces while keeping accent hue consistent. */
-    --bg:       #eef2f8;
-    --panel:    #ffffff;
-    --panel-2:  #f5f8fd;
-    --panel-3:  #e9eff7;
-    --border:   #d1d9e4;
-    --border-s: rgba(140,160,190,0.28);
-    --text:     #1a2332;
-    --muted:    #5a7590;
-    --muted-2:  #8fa5bc;
-    --accent:   #2563eb;
-    --accent-h: #1d4ed8;
-    --blue:     #1d4ed8;
-    --danger:   #dc2626;
-    --warn:     #b45309;
-    --accent-glow: rgba(37,99,235,0.18);
-    --accent-glow-soft: rgba(37,99,235,0.08);
-    --toast-bg: rgba(255,255,255,0.97);
+    /* Light palette — neutral off-white surfaces with dark-gray text for daylight
+       legibility without the eye-strain of pure black-on-white. Borders deliberately
+       deep so panel edges and form outlines stay clearly visible. */
+    --bg:       #e2e2df;   /* main app bg — cool neutral off-white */
+    --panel:    #ededeb;   /* primary panels — lighter off-white */
+    --panel-2:  #d4d4d1;   /* hover / section backgrounds */
+    --panel-3:  #c0c0bd;   /* deeper neutral for chips + accents */
+    --border:   #555552;   /* strong, clearly-visible dark neutral gray border */
+    --border-s: rgba(60,60,58,0.3);  /* subtler divider for inline separators */
+    --text:     #242422;   /* dark neutral gray — NOT pure black */
+    --muted:    #4e4e4b;   /* mid gray for secondary text */
+    --muted-2:  #6e6e6b;   /* lighter gray for captions */
+    --accent:   #1e40af;   /* deeper royal blue for strong contrast on off-white */
+    --accent-h: #1e3a8a;
+    --blue:     #1e40af;
+    --danger:   #991b1b;
+    --warn:     #92400e;
+    --accent-glow: rgba(30,64,175,0.22);
+    --accent-glow-soft: rgba(30,64,175,0.09);
+    --toast-bg: rgba(237,237,235,0.98);
     --map-tile-filter: none;
   }
   * { box-sizing: border-box; }
@@ -75,11 +78,45 @@
   /* ── Layout ── */
   #app { display: grid; grid-template-columns: clamp(280px, 33vw, 400px) 1fr; height: 100vh; overflow: hidden; }
 
-  /* ── Map ── */
+  /* ── Map (Leaflet 2D) ── */
   #map { height: 100%; background: #c9ced3; }
   #map .leaflet-tile-pane { filter: var(--map-tile-filter); }
   #map.placement-arm,
   #map.placement-arm .leaflet-grab { cursor: crosshair; }
+
+  /* ── Map (MapLibre 3D) ── */
+  /* Sits in the same grid cell as #map and is positioned absolutely so it overlaps
+     exactly; JS toggles visibility by adding/removing the `is-hidden` modifier.
+     NB: using a class rather than `style.display=''` because otherwise we'd have to
+     remember `display: block` vs `display: none` at every toggle site. */
+  .map-container { position: relative; height: 100%; overflow: hidden; }
+  #map, #map3d {
+    position: absolute; inset: 0;
+    height: 100%; width: 100%;
+    background: #c9ced3;
+  }
+  #map.is-hidden, #map3d.is-hidden { display: none; }
+
+  /* 2D/3D mode toggle — floats over whichever map is currently visible. */
+  .map-mode-toggle {
+    position: absolute; top: 10px; right: 10px;
+    z-index: 500;
+    display: flex; gap: 0;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    overflow: hidden;
+    font-family: inherit;
+  }
+  .map-mode-toggle button {
+    background: transparent; color: var(--muted);
+    border: none; padding: 6px 11px;
+    font-size: 12px; font-weight: 600; cursor: pointer;
+    font-family: inherit; letter-spacing: 0.04em;
+    transition: background 0.12s, color 0.12s;
+  }
+  .map-mode-toggle button:hover { color: var(--text); background: var(--panel-2); }
+  .map-mode-toggle button.is-active { color: var(--text); background: var(--panel-2); }
+  .map-mode-toggle button + button { border-left: 1px solid var(--border-s); }
 
   /* ── Sidebar ── */
   #side {
@@ -489,10 +526,15 @@
   .path-hint { font-size: 10px; color: var(--muted-2); line-height: 1.55; margin-top: 8px; border-top: 1px solid var(--border-s); padding-top: 8px; }
 
   /* ── Leaflet ── */
+  /* Drone label tooltip — background goes through the theme tokens so the text color
+     (var(--text)) always contrasts. Previously the background was a hardcoded dark
+     navy which kept working in dark mode but collapsed to dark-text-on-dark in light
+     mode (drone names appeared gray/unreadable once a drone came online). */
   .leaflet-tooltip.drone-label {
-    background: rgba(13,17,23,0.93); border: 1px solid var(--border);
+    background: var(--panel); border: 1px solid var(--border);
     color: var(--text); font-size: 10px; padding: 2px 7px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.4); border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25); border-radius: 4px;
+    font-weight: 600;
   }
   .leaflet-tooltip.drone-label::before { display: none; }
 
@@ -628,8 +670,16 @@
     </div>
   </aside>
 
-  <!-- ── Map (2/3) ── -->
-  <div id="map"></div>
+  <!-- ── Map (2/3) — wraps both the 2D Leaflet view and the 3D MapLibre view so the
+       same grid cell hosts whichever one is currently active. ── -->
+  <div class="map-container">
+    <div id="map"></div>
+    <div id="map3d" class="is-hidden"></div>
+    <div class="map-mode-toggle" role="group" aria-label="Map mode">
+      <button id="map-mode-2d" class="is-active" type="button">2D</button>
+      <button id="map-mode-3d" type="button">3D</button>
+    </div>
+  </div>
 
   <!-- ── Transient toasts (bottom-right) ── -->
   <div id="toast-stack" aria-live="polite" aria-atomic="false"></div>
@@ -706,6 +756,7 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script>
 'use strict';
 
@@ -740,7 +791,7 @@ function addLiveDrone(s, lat, lng) {
   const color = PALETTE[idx % PALETTE.length];
   const marker = L.circleMarker([lat, lng], { radius: 8, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 }).addTo(map);
   marker.bindTooltip(s.label || s.id, { permanent: true, direction: 'top', offset: [0, -6], className: 'drone-label' });
-  const entry = { marker, sourceId: s.id, label: s.label || s.id, online: !!s.online, color, lat, lng, reach: s.reach_m || 800 };
+  const entry = { marker, sourceId: s.id, label: s.label || s.id, online: !!s.online, color, lat, lng, reach: s.reach_m || 800, path: s.path || [] };
   liveByBackendId.set(s.id, entry);
   return entry;
 }
@@ -759,6 +810,7 @@ function reconcileLive(snapshots) {
       existing.lat = lat; existing.lng = lng;
       existing.label = s.label || s.id;
       existing.online = !!s.online;
+      existing.path = s.path || [];
       if (s.reach_m) { existing.reach = s.reach_m; }
       existing.marker.setLatLng([lat, lng]);
       existing.marker.setTooltipContent(s.label || s.id);
@@ -1232,16 +1284,19 @@ async function openDetectionsPanel() {
   // recorded detections while the panel was closed — or addDetection was
   // called for them already, in which case bootstrapDetections is a no-op).
   await bootstrapDetections();
-  document.getElementById('map').style.display = 'none';
+  // Hide the entire map-container (both 2D and 3D views) so the detections panel
+  // can claim the grid cell.
+  document.querySelector('.map-container').style.display = 'none';
   document.getElementById('detections-panel').classList.add('is-open');
   renderDetectionsPanel();
 }
 
 function closeDetectionsPanel() {
   document.getElementById('detections-panel').classList.remove('is-open');
-  document.getElementById('map').style.display = '';
+  document.querySelector('.map-container').style.display = '';
   // Map tiles can mis-lay out after being hidden; nudge Leaflet.
   setTimeout(() => map.invalidateSize(), 50);
+  if (map3d && is3DActive) setTimeout(() => map3d.resize(), 50);
 }
 
 document.getElementById('notif-expand').addEventListener('click', (e) => {
@@ -1317,6 +1372,267 @@ bootstrapDetections();
 // Safety net: poll detections in case WS drops or skips a tick. addDetection
 // dedupes via detectionsById so this is idempotent and cheap.
 setInterval(bootstrapDetections, 5000);
+
+// ── 3D Map (MapLibre GL JS + OpenFreeMap) ────────────────────────────────
+// Lazily-initialized 3D view using OpenStreetMap vector tiles with extruded building
+// geometry. Toggled via the 2D/3D button in the map's top-right corner.
+//
+// Drones are rendered as discs floating at ~100 m altitude so the operator can SEE
+// them flying; their planned path is drawn as a thin ribbon at the same altitude.
+// Implementation uses MapLibre `fill-extrusion` layers because that's the only
+// style-spec primitive in MapLibre 4.x that supports world-space Z. Drone positions
+// come from telemetry; the altitude is a fixed visualization-only value (the real
+// WGS84 altitude from telemetry tends to be tens-of-meters AGL which renders as
+// almost-ground and defeats the purpose of a 3D view).
+let map3d = null;
+let is3DActive = false;
+const detection3dMarkers = new Map();  // detection id → maplibregl.Marker (stays on the ground)
+
+const DRONE_SKY_ALT_M    = 100;   // drones + paths float at this altitude in 3D
+const DRONE_DISC_HALF_M  = 3;     // ± around DRONE_SKY_ALT_M → 6 m tall cylinder
+const DRONE_DISC_RADIUS  = 8;     // horizontal radius of the drone disc in meters
+const PATH_RIBBON_HALF_M = 1;     // ± around altitude → 2 m tall ribbon
+const PATH_RIBBON_WIDTH  = 3;     // meters — ribbon thickness perpendicular to travel
+
+// Meter-to-degree conversion for a given latitude (WGS84 equirectangular approximation,
+// fine for sub-kilometer geometry like drone markers and path ribbons).
+function mDegAt(lat) {
+  return {
+    latPerM: 1 / 111320,
+    lngPerM: 1 / (111320 * Math.cos(lat * Math.PI / 180)),
+  };
+}
+
+function discPolygon(lng, lat, radiusM, sides = 18) {
+  const { latPerM, lngPerM } = mDegAt(lat);
+  const ring = [];
+  for (let i = 0; i <= sides; i++) {
+    const theta = (i / sides) * 2 * Math.PI;
+    ring.push([lng + Math.cos(theta) * radiusM * lngPerM,
+               lat + Math.sin(theta) * radiusM * latPerM]);
+  }
+  return [ring];
+}
+
+function ribbonSegment(aLng, aLat, bLng, bLat, widthM) {
+  const midLat = (aLat + bLat) / 2;
+  const { latPerM, lngPerM } = mDegAt(midLat);
+  const dxM = (bLng - aLng) / lngPerM;
+  const dyM = (bLat - aLat) / latPerM;
+  const len = Math.hypot(dxM, dyM) || 1;
+  // Perpendicular, scaled to half-width, back to degrees.
+  const offLngDeg = (-dyM / len) * (widthM / 2) * lngPerM;
+  const offLatDeg = ( dxM / len) * (widthM / 2) * latPerM;
+  return [[
+    [aLng + offLngDeg, aLat + offLatDeg],
+    [bLng + offLngDeg, bLat + offLatDeg],
+    [bLng - offLngDeg, bLat - offLatDeg],
+    [aLng - offLngDeg, aLat - offLatDeg],
+    [aLng + offLngDeg, aLat + offLatDeg],
+  ]];
+}
+
+function ensureMap3DInitialized() {
+  if (map3d) return map3d;
+
+  // Seed with the Leaflet map's current view so the toggle feels continuous.
+  const c = map.getCenter();
+  map3d = new maplibregl.Map({
+    container: 'map3d',
+    // OpenFreeMap Liberty — free, no API key, includes full OSM vector data.
+    style: 'https://tiles.openfreemap.org/styles/liberty',
+    center: [c.lng, c.lat],
+    zoom: map.getZoom(),
+    pitch: 55,         // tilted view so buildings read as 3D
+    bearing: -17,
+    antialias: true,
+    attributionControl: true,
+  });
+  map3d.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-left');
+
+  map3d.on('load', () => {
+    // Find the first symbol layer so labels render ON TOP of extruded buildings.
+    const layers = map3d.getStyle().layers;
+    let firstSymbolId;
+    for (const l of layers) { if (l.type === 'symbol') { firstSymbolId = l.id; break; } }
+
+    // ── 3D buildings ────────────────────────────────────────────────────
+    map3d.addLayer({
+      id: 'argus-3d-buildings',
+      source: 'openmaptiles',
+      'source-layer': 'building',
+      filter: ['!=', ['get', 'hide_3d'], true],
+      type: 'fill-extrusion',
+      minzoom: 13,
+      paint: {
+        'fill-extrusion-color': [
+          'interpolate', ['linear'], ['get', 'render_height'],
+          0, '#d9d4c7', 20, '#c3bca8', 60, '#a89e80', 200, '#7a6f58',
+        ],
+        'fill-extrusion-height': ['coalesce', ['get', 'render_height'], ['get', 'height'], 6],
+        'fill-extrusion-base':   ['coalesce', ['get', 'render_min_height'], 0],
+        'fill-extrusion-opacity': 0.92,
+      },
+    }, firstSymbolId);
+
+    // ── Drone path ribbons floating at DRONE_SKY_ALT_M ──────────────────
+    map3d.addSource('argus-paths-sky', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map3d.addLayer({
+      id: 'argus-paths-sky',
+      type: 'fill-extrusion',
+      source: 'argus-paths-sky',
+      paint: {
+        'fill-extrusion-color': ['get', 'color'],
+        'fill-extrusion-base':   DRONE_SKY_ALT_M - PATH_RIBBON_HALF_M,
+        'fill-extrusion-height': DRONE_SKY_ALT_M + PATH_RIBBON_HALF_M,
+        'fill-extrusion-opacity': 0.85,
+      },
+    });
+
+    // ── Drone disc markers at DRONE_SKY_ALT_M ───────────────────────────
+    map3d.addSource('argus-drones-sky', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map3d.addLayer({
+      id: 'argus-drones-sky',
+      type: 'fill-extrusion',
+      source: 'argus-drones-sky',
+      paint: {
+        'fill-extrusion-color': ['get', 'color'],
+        'fill-extrusion-base':   DRONE_SKY_ALT_M - DRONE_DISC_HALF_M,
+        'fill-extrusion-height': DRONE_SKY_ALT_M + DRONE_DISC_HALF_M,
+        'fill-extrusion-opacity': 0.95,
+      },
+    });
+
+    // Paint existing drones + detections that are already on the Leaflet map.
+    syncDronesTo3D();
+    syncDetectionsTo3D();
+  });
+
+  return map3d;
+}
+
+function buildDetectionPinElement() {
+  const el = document.createElement('div');
+  el.style.cssText = `
+    width: 11px; height: 11px; border-radius: 50%;
+    background: #f85149; border: 2px solid #fff;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.4), 0 2px 6px rgba(0,0,0,0.5);
+  `;
+  return el;
+}
+
+function syncDronesTo3D() {
+  if (!map3d || !map3d.isStyleLoaded() || !map3d.getSource('argus-drones-sky')) return;
+
+  const droneFeatures = [];
+  const pathFeatures = [];
+
+  for (const [id, d] of liveByBackendId) {
+    if (d.lat == null || d.lng == null) continue;
+    const color = d.color || '#58a6ff';
+    // Disc at altitude for the drone itself.
+    droneFeatures.push({
+      type: 'Feature',
+      properties: { id, color, label: d.label || id },
+      geometry: { type: 'Polygon', coordinates: discPolygon(d.lng, d.lat, DRONE_DISC_RADIUS) },
+    });
+
+    // Planned path → ribbon-per-segment at the same altitude. Registry stores
+    // `path` as an array of {lat, lon|lng, alt} waypoints; we ignore the z and
+    // paint everything at DRONE_SKY_ALT_M for visualization consistency.
+    const pts = (d.path || []).map(p => [p.lon ?? p.lng, p.lat]).filter(([lng, lat]) => lng != null && lat != null);
+    for (let i = 0; i < pts.length - 1; i++) {
+      pathFeatures.push({
+        type: 'Feature',
+        properties: { id, color },
+        geometry: { type: 'Polygon', coordinates: ribbonSegment(pts[i][0], pts[i][1], pts[i+1][0], pts[i+1][1], PATH_RIBBON_WIDTH) },
+      });
+    }
+  }
+
+  map3d.getSource('argus-drones-sky').setData({ type: 'FeatureCollection', features: droneFeatures });
+  map3d.getSource('argus-paths-sky').setData({ type: 'FeatureCollection', features: pathFeatures });
+}
+
+function syncDetectionsTo3D() {
+  if (!map3d) return;
+  // Only reflect detections the user has explicitly pinned in 2D — keeps the 3D
+  // view uncluttered on busy prompts, consistent with how Leaflet treats pins.
+  for (const [id, m2d] of detectionMarkers) {
+    if (detection3dMarkers.has(id)) continue;
+    const det = detectionsById.get(id);
+    if (!det || det.lat == null || det.lng == null) continue;
+    const m3d = new maplibregl.Marker({ element: buildDetectionPinElement() })
+      .setLngLat([det.lng, det.lat])
+      .setPopup(new maplibregl.Popup({ offset: 10 }).setHTML(
+        `<strong>${esc(det.droneLabel || det.droneId)}</strong><br>${esc(det.prompt)}`
+      ))
+      .addTo(map3d);
+    detection3dMarkers.set(id, m3d);
+  }
+  for (const [id, m3d] of detection3dMarkers) {
+    if (!detectionMarkers.has(id)) { m3d.remove(); detection3dMarkers.delete(id); }
+  }
+}
+
+function activate3D() {
+  if (is3DActive) return;
+  is3DActive = true;
+  document.getElementById('map').classList.add('is-hidden');
+  document.getElementById('map3d').classList.remove('is-hidden');
+  document.getElementById('map-mode-2d').classList.remove('is-active');
+  document.getElementById('map-mode-3d').classList.add('is-active');
+  // Init ONLY after the container is visible — MapLibre reads container dimensions
+  // on construction, and if the div is still display:none it sees 0×0 and never
+  // renders. `requestAnimationFrame` lets the browser lay out the now-visible div
+  // before we hand it to MapLibre.
+  requestAnimationFrame(() => {
+    ensureMap3DInitialized();
+    // Sync view from Leaflet on every activate so the two stay aligned.
+    const c = map.getCenter();
+    map3d.jumpTo({ center: [c.lng, c.lat], zoom: map.getZoom() });
+    map3d.resize();
+    syncDronesTo3D();
+    syncDetectionsTo3D();
+  });
+}
+
+function activate2D() {
+  if (!is3DActive) return;
+  is3DActive = false;
+  document.getElementById('map3d').classList.add('is-hidden');
+  document.getElementById('map').classList.remove('is-hidden');
+  document.getElementById('map-mode-3d').classList.remove('is-active');
+  document.getElementById('map-mode-2d').classList.add('is-active');
+  // Pull view from 3D back to 2D so the user doesn't lose their place.
+  if (map3d) {
+    const c = map3d.getCenter();
+    map.setView([c.lat, c.lng], Math.round(map3d.getZoom()));
+  }
+  setTimeout(() => map.invalidateSize(), 50);
+}
+
+document.getElementById('map-mode-3d').addEventListener('click', activate3D);
+document.getElementById('map-mode-2d').addEventListener('click', activate2D);
+
+// Piggy-back on the existing live-sync ticks so 3D markers track telemetry.
+(function () {
+  const origReconcile = reconcileLive;
+  window.reconcileLive = reconcileLive = function (snapshots) {
+    origReconcile(snapshots);
+    if (is3DActive) syncDronesTo3D();
+  };
+  const origPin = pinDetection;
+  window.pinDetection = pinDetection = function (det) {
+    origPin(det);
+    if (is3DActive) syncDetectionsTo3D();
+  };
+  const origUnpin = unpinDetection;
+  window.unpinDetection = unpinDetection = function (id) {
+    origUnpin(id);
+    if (is3DActive) syncDetectionsTo3D();
+  };
+})();
 
 
 // ── Utility ───────────────────────────────────────────────────────────────
