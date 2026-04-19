@@ -1,23 +1,21 @@
 <div align="center">
-  <img src="WildBridge_icon.png" alt="WildBridge App Icon" width="300" height="300">
+  <img src="ARGUS_icon.png" alt="ARGUS Hub" width="420">
 </div>
 
-> **WildBridge: Ground Station Interface for Lightweight Multi-Drone Control and Telemetry on DJI Platforms**  
-> Part of the [WildDrone Project](https://wilddrone.eu) - European Union's Horizon Europe Research Program
+> **ARGUS Hub — AI-Orchestrated Multi-Drone Swarm Command & Control**
+> Edge-driven FastAPI hub with SAM 3.1 vision, Gemini image descriptions, live dashboard with 2D + 3D OSM maps, and hardened path following.
+> Built atop the [WildBridge](https://portal.findresearcher.sdu.dk/en/publications/wildbridge-ground-station-interface-for-lightweight-multi-drone-c) DJI SDK V5 bridge (Rolland et al., RiTA 2025 — part of the EU Horizon Europe [WildDrone](https://wilddrone.eu) programme).
 
 ## Overview
 
-WildBridge is an open-source Android application that extends DJI's Mobile SDK V5 to provide accessible telemetry, video streaming, and low-level control for scientific research applications. Running directly on the DJI remote controller, it exposes network interfaces (HTTP and RTSP) over a local area network, enabling seamless integration with ground stations and external research tools.
+**ARGUS Hub** (`GroundStation/WebServer/`) is the control plane: a FastAPI server that drones join themselves over WebSockets, runs centralized AI inference on every pushed video frame, and surfaces detections + live telemetry to a single-page dashboard. The hub is entirely in-memory — nothing persists across restarts, no registry file, no pre-configuration.
 
- 
-![WildBridge Diagram](https://github.com/WildDrone/WildBridge/blob/main/WildBridgeDiagram.png "WildBridge System Architecture")
-
+The **WildBridge Android app** (`WildBridgeApp/`) is the edge component: installed on a DJI RC controller, it exposes the aircraft's telemetry and control surfaces over HTTP/TCP/RTSP on the local network. The ARGUS edge client (`GroundStation/client/aegis_client.py`) bridges WildBridge's RC-side contract to the hub's WebSocket contract. The hub treats a simulated drone (`mock_remote.py`) and a real RC identically.
 
 ## Research and Citation
 
-This work is part of the WildDrone project, funded by the European Union's Horizon Europe Research Program (Grant Agreement No. 101071224). The WildDrone project has also received funding in part from the EPSRC-funded Autonomous Drones for Nature Conservation Missions grant (EP/X029077/1).
+Based on the WildBridge platform, funded by the European Union's Horizon Europe Research Program (Grant Agreement No. 101071224) and the EPSRC-funded *Autonomous Drones for Nature Conservation Missions* grant (EP/X029077/1).
 
-**Academic Papers**:
 ```bibtex
 @inproceedings{Rolland2025WildBridge,
   author    = {Edouard Rolland and Kilian Meier and Murat Bronz and Aditya Shrikhande and Tom Richardson and Ulrik Pagh Schultz Lundquist and Anders Christensen},
@@ -32,19 +30,42 @@ This work is part of the WildDrone project, funded by the European Union's Horiz
 }
 ```
 
-### Key Features
+## What's New (tip of `main` — commit `b322c68`, 2026-04-19)
 
-- **Real-time AI Vision (SAM 3.1)**: Centralized `VisionDaemon` runs SAM 3.1 round-robin over every connected drone's live frame against a natural-language prompt, stores the last 50 annotated hit-frames AND the last 50 un-annotated raw frames, and surfaces every detection (drone, prompt, GPS, SAM-overlaid frame) to the UI via WebSocket fan-out.
-- **Gemini Image Descriptions**: Every detection carries an opt-in "Description" checkbox. On demand, the raw un-annotated frame is POSTed to `gemini-flash-latest` with a **subject-only** prompt — Gemini describes just the detected object (e.g. *"Silver metallic travel mug with matte finish and a black lid"*) plus a 0-100 confidence score, cached server- AND client-side so each detection costs at most one API call. Key lives in a gitignored `.env`; missing key degrades gracefully to a fallback response.
-- **Light / Dark Dashboard Theme**: Glassmorphic UI with a sun/moon toggle in the header. Theme is persisted in `localStorage`, falls back to `prefers-color-scheme`, and is applied before first paint to avoid a flash.
-- **Detection Dashboard**: Clickable live detection list with per-detection fullscreen lightbox, auto-pinning of every hit on the Leaflet map with hover-preview of the frame, a full-screen expanded detections panel, and transient toast notifications.
-- **Edge-Driven Architecture**: Drones join the hub natively via WebSockets and push their own telemetry and video; no manual pre-registration, no server-side RTSP pull.
-- **Server-Side Path Allocation**: Dynamic zigzag/sweep sector assignment across the swarm, skipped for drones already flying an active mission so in-flight paths aren't yanked when a new drone joins.
-- **Hardened Control Loop (Python-side)**: The trajectory wire format now carries a non-zero pure-pursuit lookahead (prevents perpendicular oscillation caused by a positional-argument collision in the unchanged Android handler), and the edge client uses a 5 m / 4 s dwell / 10 s cooldown reversal state machine that absorbs Mini-3-Pro-grade GPS noise (±2–4 m) near patrol endpoints.
-- **Real-time Telemetry**: 20 Hz edge-side sampling, 1 Hz dashboard fan-out via `/ws/drones`.
-- **Live Swarm Video**: Every connected drone renders as an MJPEG tile; any tile opens full-screen in the same lightbox used for detection frames.
-- **Multi-drone Coordination**: Tested concurrent fleets with sub-100 ms command latency inside the edge stack.
-- **Cross-platform Integration**: Compatible with standard DJI RC platforms, a Python mock RC (`mock_remote.py`), and the direct-HTTP Python / ROS 2 clients under `GroundStation/`.
+- **Swarm spawns at 100 m reach** per drone with a debounced path broadcast (1.5 s trailing edge) and equality-gated sends — rapid join/disconnect churn no longer spams drones with superseded waypoints. (`GroundStation/WebServer/app/routes.py`)
+- **3D dashboard** with MapLibre + OpenFreeMap, drones + paths floating at altitude (`static/dashboard.html`).
+- **Gemini image description** integration with subject-only prompt + cached responses (`app/gemini.py`, `app/config.py`, `.env`).
+- **Light / dark theme toggle** on the dashboard with `localStorage` persistence.
+- **Mini-3-Pro flight hardening** — pure-pursuit lookahead restored, reversal debounced (`GroundStation/client/aegis_client.py`).
+- **Mid-flight re-allocation guard** via `mission_state` from the edge client.
+
+## Feature Summary
+
+### AI Vision & Understanding
+- **SAM 3.1 centralized vision.** A single `VisionDaemon` holds the SAM 3.1 model in VRAM and round-robins inference across every connected drone's most-recent video frame against a swarm-wide natural-language prompt. On a hit it captures TWO JPEGs at the same instant — the annotated frame (with SAM mask + bounding box overlaid) for operator viewing, and the un-annotated raw frame for downstream processing.
+- **Gemini image descriptions.** Every detection gains an opt-in **Description** checkbox in the dashboard. On demand, the raw frame is POSTed to `gemini-flash-latest` with a *subject-only* prompt — Gemini describes just the detected object (e.g. *"Silver metallic travel mug with matte finish and a black lid"*) and returns a 0-100 confidence score. Results are cached both server- and client-side so each detection costs at most one Gemini round-trip. Missing/invalid API key degrades gracefully to a fallback response; there are no 500s.
+
+### Dashboard
+- **Single-page, no build step.** Inline HTML + CSS + JS in `static/dashboard.html`. Talks to `/api/drones`, `/api/detections`, `/api/prompt`, and `/ws/drones`.
+- **Light / dark theme.** Neutral off-white palette with dark-gray text in light mode; glassmorphic dark palette in dark mode. Applied before first paint via a tiny inline head script (no FOUC). Persisted in `localStorage`; falls back to `prefers-color-scheme`.
+- **2D map (Leaflet + CARTO).** Live drone markers with permanent labels, auto-pinned detection hits with hover-preview thumbnails, and dashed path polylines per drone (colored to match the drone marker).
+- **3D map (MapLibre GL JS + OpenFreeMap).** Toggle-able view with extruded OSM building geometry. Drones render as floating colored discs at 100 m altitude; each drone's planned path renders as a thin colored ribbon at the same altitude so the operator can watch the drone track its sweep through the sky. No API key; OpenFreeMap vector tiles are free.
+- **Detection tray + full-panel view.** Compact list with toast notifications on *live* hits; `⛶` opens a full card grid (each card: annotated JPEG, Pin-to-Map checkbox, Description checkbox, GPS coords).
+- **Fullscreen lightbox.** Shared for both detection frames and live MJPEG streams. Clicking a detection shows the annotated frame with the Description checkbox; clicking a drone tile shows the live feed. Closing the lightbox releases the MJPEG stream.
+
+### Edge Stack & Path Following
+- **Edge-driven registration.** Drones join via `WS /ws/swarm/{uuid}` and push telemetry + video themselves — no server-side RTSP polling, no pre-registration.
+- **Server-side swarm pathing.** The hub allocates non-overlapping zigzag/sweep sectors to every drone on join or disconnect using a grid-based exclusive-owner allocator (`app/pathing.py`, reach 100 m per drone, 10 m stripe spacing, 20 m cells).
+- **Debounced path broadcasts.** Path updates are trailing-edge debounced by 1.5 s so rapid join/disconnect churn doesn't spam drones with superseded routes. Equality-gated: a drone only receives a new path message if the waypoint list actually changed.
+- **Mid-flight re-allocation guard.** Drones that have announced `mission_state: active` are skipped during re-allocation, preventing an in-flight path from being yanked when a second drone joins.
+- **Pure-pursuit lookahead fix (Python-side).** A long-standing positional-argument collision between the Python edge client and the unchanged Android `DroneController.navigateTrajectory` was making `lookaheadDistance` resolve to 0, which degenerated pure pursuit into aim-at-own-projection and caused perpendicular oscillation across patrol lines. The edge client now pins the 4th CSV field (which binds positionally to `lookaheadDistance` on the drone side) to 5.5 m — restoring smooth tracking without any APK rebuild.
+- **Reversal state machine.** On patrol endpoints, the edge client only reverses when within 5 m *and* has dwelled there ≥ 4 s *and* the last reversal was ≥ 10 s ago. Tuned to absorb ±2-4 m GPS noise on a Mini 3 Pro without false-triggering.
+
+### Other
+- **Real-time telemetry.** 20 Hz edge-side sampling, 1 Hz dashboard fan-out via `WS /ws/drones`.
+- **Live MJPEG video.** One tile per drone in the sidebar grid; any tile opens full-screen in the shared lightbox.
+- **Tested with simulated multi-drone fleets.** Sub-100 ms command latency inside the edge stack, 6 concurrent video streams before degradation.
+- **Cross-platform**: Python / ROS 2 / Android / browser. Backend is FastAPI + uvicorn; Android app uses DJI MSDK V5; ROS 2 Humble wrapper in `GroundStation/ROS/`.
 
 ## Supported Hardware
 
@@ -79,69 +100,21 @@ Based on controlled experiments with consumer-grade hardware:
 ## Quick Start
 
 ### Prerequisites
+- DJI drone + compatible RC (see [Supported Hardware](#supported-hardware)) **or** a ground-station computer alone for simulation.
+- Local Wi-Fi network, 5 GHz recommended. The RC and the ground-station must share the subnet — no NAT.
+- Python 3.11+ and, optionally, a CUDA GPU for SAM 3.1 (CPU works but each frame is seconds, not milliseconds).
 
-1. **Hardware Setup**
-   - DJI drone and compatible remote controller
-   - Local Wi-Fi network (5GHz recommended)
-   - Ground station computer
+### Real-drone deployment — WildBridge app on the RC
 
-2. **Software Installation**
+The Android app sits on the DJI RC and exposes the drone's telemetry and control endpoints on the LAN. **You only need this for real flights; simulation below skips it entirely.**
 
-
-
-#### First, you need to install the WildBridge App on your controller: Step-by-Step Android Installation 
-
-1. **Enable Developer Mode and USB Debugging on your Android Device**
-   - Put your Android device in developer mode.
-   - Enable USB debugging in developer options.
-
-2. **Install Android Studio**
-   - Download and install Android Studio Koala 2024.1.1:
-     [Download Android Studio Koala 2024.1.1](https://redirector.gvt1.com/edgedl/android/studio/ide-zips/2024.1.2.13/android-studio-2024.1.2.13-linux.tar.gz)
-
-3. **Clone the WildBridge Repository**
-   - Open a terminal and run:
-     ```bash
-     git clone https://github.com/WildDrone/WildBridge.git
-     ```
-
-4. **Open the Project in Android Studio**
-   - In Android Studio, select "Open" and choose:
-     ```
-     WildBridge/WildBridgeApp/android-sdk-v5-as
-     ```
-
-5. **Become a DJI developer and get an API key**
-   - Register as a DJI developer and get an API key: [https://developer.dji.com/](https://developer.dji.com/)
-   - Past your API key in:
-     ```
-     WildBridge/WildBridgeApp/android-sdk-v5-as/local.properties 
-     ```
-     ```
-     AIRCRAFT_API_KEY="App key"
-     ```
-
-5. **Build and Deploy the App**
-   - Build the app in Android Studio. Install any prompted dependencies.
-   - Deploy the app to your controller.
-
-6. **Start the Server on the Drone Controller**
-   - In WildBridge, click "Testing Tools".
-   - Open the "Virtual Stick" page.
-   - The server is now running. You can send commands, view RTSP videofeed, and retrieve telemetry.
-
-Refer to the code snippets in the Quick Start section for examples of sending commands and retrieving telemetry.
-
-
-3. **Python GS Dependencies**
-   ```bash
-   pip install -r GroundStation/Python/requirements.txt
+1. Open `WildBridgeApp/android-sdk-v5-as/` in **Android Studio Koala 2024.1.1**.
+2. Put your [DJI developer](https://developer.dji.com/) API key in `local.properties` (**no quotes**):
    ```
-
-4. **ROS GS Dependencies**
-   ```bash
-   pip install -r GroundStation/ROS/requirements.txt
+   AIRCRAFT_API_KEY=your-key-here
    ```
+3. Build (generate the keystore from `gradle.properties` if prompted: `msdkkeystore.jks`, password `123456`, alias `msdkkeystore`) and deploy to the RC or an Android phone over USB.
+4. On the RC, open WildBridge → Testing Tools → **Virtual Stick**. The HTTP/TCP/RTSP servers are live only while this page is foregrounded.
 
 ### Basic Usage
 
