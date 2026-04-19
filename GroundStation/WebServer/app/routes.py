@@ -123,7 +123,7 @@ def broadcast_swarm_paths(app_state: Any):
             "id": d["id"],
             "lat": path_lat,
             "lng": path_lng,
-            "reach": 50
+            "reach": 100
         })
 
     result = compute_paths(pathing_input, stripe_spacing=10, sweep_dir='ew')
