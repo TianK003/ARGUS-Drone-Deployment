@@ -7,6 +7,7 @@ import threading
 import requests
 import cv2
 import math
+import websocket
 
 # Ensure we can import the DJIInterface from the GroundStation module
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -17,10 +18,15 @@ try:
     from djiInterface import DJIInterface
 except ImportError:
     print("Error: Could not import DJIInterface. Please ensure it exists in GroundStation/Python/")
-    sys.exit(1)
+import argparse
 
 # Global Configuration
 SERVER_URL = "http://127.0.0.1:8000"
+WS_URL = SERVER_URL.replace("http://", "ws://").replace("https://", "wss://")
+IP_RC = "10.102.252.30"
+PORT_HTTP = 8080
+PORT_TCP = 8081
+WS_URL = SERVER_URL.replace("http://", "ws://").replace("https://", "wss://")
 IP_RC = "10.102.252.30"
 DRONE_ID = f"drone-{str(uuid.uuid4())[:8]}"
 
@@ -28,25 +34,33 @@ DRONE_ID = f"drone-{str(uuid.uuid4())[:8]}"
 is_running = True
 has_started_mission = False
 
-def push_telemetry_loop(dji):
-    """Continuously push telemetry data to the central server."""
-    global is_running
-    url = f"{SERVER_URL}/api/swarm/{DRONE_ID}/telemetry"
+# Dynamic state variables controlled by Hub
+current_trajectory = []
+final_yaw = 0
+target_altitude = 200.0
+path_ready_event = threading.Event()
+ws_app: websocket.WebSocketApp = None
+dji: DJIInterface = None
+
+def push_telemetry_loop():
+    """Continuously push telemetry data to the central server via WebSocket."""
+    global is_running, ws_app
     while is_running:
-        telemetry = dji.getTelemetry()
-        if telemetry:
-            try:
-                # We POST the entire telemetry blob or whatever subset the server needs
-                requests.post(url, json=telemetry, timeout=2)
-            except requests.RequestException:
-                pass # Ignore connection drops on telemetry
+        if ws_app and ws_app.sock and ws_app.sock.connected:
+            telemetry = dji.getTelemetry()
+            if telemetry:
+                try:
+                    payload = {"action": "telemetry", "data": telemetry}
+                    ws_app.send(json.dumps(payload))
+                except Exception:
+                    pass
         time.sleep(1.0) # 1Hz update rate
 
-def push_video_loop(dji):
+def push_video_loop():
     """Continuously fetch RTSP frames and POST them to the server."""
     global is_running, has_started_mission
     
-    # Wait until mission starts to save bandwidth, or start immediately if preferred
+    # Wait until mission starts to save bandwidth
     while is_running and not has_started_mission:
         time.sleep(0.5)
         
@@ -76,107 +90,124 @@ def push_video_loop(dji):
             continue
             
         fail_count = 0
-            
-        # Encode frame as JPEG
         _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
         
         try:
-            # Pushing individual frames via POST for simplicity
+            # Video intentionally stays on HTTP POST to avoid clogging the text-based WS socket
             requests.post(url, data=buffer.tobytes(), headers={'Content-Type': 'image/jpeg'}, timeout=1)
         except requests.RequestException:
-            pass # Ignore dropped frames
+            pass
             
     cap.release()
 
-def main():
-    global is_running, has_started_mission
+def on_ws_message(ws, message):
+    global current_trajectory, final_yaw, target_altitude
+    data = json.loads(message)
     
-    print(f"[{DRONE_ID}] Initializing connection to DJI Remote at {IP_RC}...")
-    dji = DJIInterface(IP_RC)
+    if data.get("action") == "path_update":
+        path = data.get("waypoints", [])
+        final_yaw = data.get("finalYaw", 0)
+        target_altitude = float(data.get("targetAltitude", 200.0))
+        
+        print(f"\n[Hub] Received dynamic path update with {len(path)} waypoints (Alt: {target_altitude}m).")
+        
+        new_traj = [(p["lat"], p.get("lon", p.get("lng")), target_altitude) for p in path]
+        current_trajectory = new_traj
+        
+        if not has_started_mission:
+            path_ready_event.set()
+        elif current_trajectory:
+            # Dynamically divert the drone mid-flight
+            print(">> Replanning active flight path...")
+            try:
+                dji.requestSendNavigateTrajectory(current_trajectory, final_yaw)
+            except Exception as e:
+                print(f"Failed to redirect drone: {e}")
+
+def on_ws_error(ws, error):
+    pass
+
+def on_ws_close(ws, close_status_code, close_msg):
+    print("\n[WS] Disconnected from Hub.")
+
+def on_ws_open(ws):
+    print("[WS] Connected to Hub. Sending location...")
+    # Send Join Request
+    home_location = dji.getTelemetry().get("location")
+    if not home_location or not (home_location.get("latitude") or home_location.get("lat")):
+        home_location = {"latitude": 46.0569, "longitude": 14.5058, "altitude": 0}
+        
+    join_msg = {
+        "action": "join",
+        "homeLocation": home_location
+    }
+    ws.send(json.dumps(join_msg))
+
+def start_websocket():
+    global ws_app
+    ws_app = websocket.WebSocketApp(
+        f"{WS_URL}/ws/swarm/{DRONE_ID}",
+        on_open=on_ws_open,
+        on_message=on_ws_message,
+        on_error=on_ws_error,
+        on_close=on_ws_close
+    )
+    ws_app.run_forever()
+
+def main():
+    global is_running, has_started_mission, dji, current_trajectory
+    
+    print(f"[{DRONE_ID}] Initializing connection to DJI Remote at {IP_RC}:{PORT_HTTP}...")
+    dji = DJIInterface(IP_RC, port_http=PORT_HTTP, port_tcp=PORT_TCP)
     dji.startTelemetryStream()
     
     print("Waiting for GPS lock...")
-    home_location = None
     # Wait until we get a valid GPS fix
     for _ in range(30):
         telemetry = dji.getTelemetry()
         if telemetry and "location" in telemetry and telemetry["location"]:
             loc = telemetry["location"]
-            # Just verify it's not empty dictionary
             if isinstance(loc, dict) and (loc.get("latitude") or loc.get("lat")):
-                 home_location = loc
                  break
         time.sleep(1)
         
-    if not home_location:
-         # Mocking location for development if real drone is not connected
-         print("Warning: Could not get GPS lock. Using mock location for testing.")
-         home_location = {"latitude": 46.0569, "longitude": 14.5058, "altitude": 0}
-         
-    print(f"GPS Lock acquired: {home_location}")
-    print(f"Registering with Central Server: {SERVER_URL}...")
+    print("Starting WebSocket Client...")
+    threading.Thread(target=start_websocket, daemon=True).start()
     
-    # Send Join Request
-    try:
-        response = requests.post(
-            f"{SERVER_URL}/api/swarm/join", 
-            json={
-                "id": DRONE_ID, 
-                "homeLocation": home_location
-            },
-            timeout=5
-        )
-        response.raise_for_status()
-        data = response.json()
-        path = data.get("path", [])
-        final_yaw = data.get("finalYaw", 0)
-        target_altitude = float(data.get("targetAltitude", 200.0))
-        print(f"Successfully joined swarm. Received path with {len(path)} waypoints (Alt: {target_altitude}m).")
-    except Exception as e:
-        print(f"Failed to join swarm on server: {e}")
-        print("Cannot continue without assigned path. Exiting.")
-        dji.stopTelemetryStream()
-        sys.exit(1)
-
-    # Convert path to tuples for the DJI Interface (lat, lon, alt)
-    # Assuming the server returns [{"lat": x, "lon": y, "alt": z}, ...]
-    try:
-        # Force the patrol altitude to whatever the server commanded
-        waypoints = [(p["lat"], p.get("lon", p.get("lng")), target_altitude) for p in path]
-    except KeyError as e:
-        print(f"Invalid path format received from server. Missing key: {e}")
+    # Block until the server gives us a path
+    print("Waiting for Hub to assign patrol region...")
+    if not path_ready_event.wait(timeout=10.0):
+        print("Failed to receive initial assigned path from server. Exiting.")
+        is_running = False
         dji.stopTelemetryStream()
         sys.exit(1)
 
     input(">>> Setup Complete. Press ENTER to start mission and follow path... <<<")
     has_started_mission = True
     
-    # Start the daemon threads for pushing data
-    threading.Thread(target=push_telemetry_loop, args=(dji,), daemon=True).start()
-    threading.Thread(target=push_video_loop, args=(dji,), daemon=True).start()
+    # Start the telemetry background thread
+    threading.Thread(target=push_telemetry_loop, daemon=True).start()
+    threading.Thread(target=push_video_loop, daemon=True).start()
     
-    print("Mission Started. Pushing telemetry and video...")
+    print("Mission Started. Pushing dual streams...")
     
     try:
         print(f"Taking off and ascending to {target_altitude}m...")
         try:
             dji.requestSendTakeOff()
-            time.sleep(3) # Initial delay for takeoff buffer
+            time.sleep(3)
             dji.requestSendGotoAltitude(target_altitude)
-            time.sleep(2) # Brief spacing before trajectory command
+            time.sleep(2)
         except Exception as e:
-            print(f"Failed to execute initial takeoff and ascend: {e}")
+            print(f"Failed to execute takeoff: {e}")
 
-        if waypoints:
-            print("Sending patrol trajectory to Drone...")
+        if current_trajectory:
+            print("Sending initial trajectory to Drone...")
             try:
-                dji.requestSendNavigateTrajectory(waypoints, final_yaw)
+                dji.requestSendNavigateTrajectory(current_trajectory, final_yaw)
             except Exception as e:
-                print(f"Failed to send trajectory to drone native API: {e}")
+                print(f"Failed to send trajectory: {e}")
                 
-            current_trajectory = waypoints
-            
-            # Active Patrol Loop
             def get_distance(lat1, lon1, lat2, lon2):
                 R = 6371e3
                 d_lat = math.radians(lat2 - lat1)
@@ -187,15 +218,13 @@ def main():
             while True:
                 time.sleep(2)
                 
-                # Safety Battery Check
                 bat = dji.getBatteryLevel()
                 if 0 < bat < 20: 
-                    print(f"CRITICAL: Battery low ({bat}%). Aborting patrol sequence.")
-                    break # Break loop to trigger finally RTH block
+                    print(f"CRITICAL: Battery low ({bat}%). Aborting patrol.")
+                    break
                     
-                # Waypoint End Detection
                 loc = dji.getLocation()
-                if loc and loc.get("latitude") and loc.get("longitude"):
+                if loc and loc.get("latitude") and loc.get("longitude") and current_trajectory:
                     lat = loc["latitude"]
                     lon = loc["longitude"]
                     
@@ -206,7 +235,7 @@ def main():
                     if dist < 0.5:
                         print(f"Reached end of path segment (Dist: {dist:.1f}m). Reversing...")
                         current_trajectory = current_trajectory[::-1]
-                        time.sleep(2) # Brief hover before turning
+                        time.sleep(2)
                         try:
                             dji.requestSendNavigateTrajectory(current_trajectory, final_yaw)
                         except Exception as e:
@@ -227,19 +256,32 @@ def main():
         except Exception:
             pass
             
-        print("Disconnecting from Central Server...")
-        try:
-            requests.delete(f"{SERVER_URL}/api/swarm/{DRONE_ID}/leave", timeout=3)
-        except Exception:
-            pass
+        if ws_app:
+            ws_app.close()
             
         dji.stopTelemetryStream()
         print("Shutdown complete. Goodbye.")
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        IP_RC = sys.argv[1]
-    if len(sys.argv) > 2:
-        SERVER_URL = sys.argv[2]
-        
+    parser = argparse.ArgumentParser(description="Aegis Client Edge Node")
+    parser.add_argument("--ip", type=str, default="127.0.0.1", help="DJI Remote / Mock IP")
+    parser.add_argument("--server", type=str, default="http://127.0.0.1:8000", help="Central Hub Server URL")
+    parser.add_argument("--port-http", type=int, default=8080, help="Mock Remote HTTP Port")
+    parser.add_argument("--port-tcp", type=int, default=8081, help="Mock Remote TCP Port")
+    
+    # Still allow simple positional args for backwards compat if needed, but favor flags
+    args, unknown = parser.parse_known_args()
+    
+    IP_RC = args.ip
+    SERVER_URL = args.server
+    PORT_HTTP = args.port_http
+    PORT_TCP = args.port_tcp
+    
+    # Handle old manual passing format if users just do `client.py 127.0.0.1 http://localhost:8000`
+    if unknown and len(unknown) >= 1 and not unknown[0].startswith("--"):
+        IP_RC = unknown[0]
+        if len(unknown) >= 2 and not unknown[1].startswith("--"):
+            SERVER_URL = unknown[1]
+
+    WS_URL = SERVER_URL.replace("http://", "ws://").replace("https://", "wss://")
     main()

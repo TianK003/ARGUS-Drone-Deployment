@@ -15,6 +15,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .registry import DroneRegistry
+from .pathing import compute_paths
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +32,9 @@ class LocationModel(BaseModel):
 class JoinRequest(BaseModel):
     id: str
     homeLocation: LocationModel
+
+class PromptRequest(BaseModel):
+    prompt: str
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -72,43 +76,106 @@ def list_drones(request: Request):
     """Retrieve all drone state for the dashboard."""
     return {"drones": _registry(request).list()}
 
-@router.post("/api/swarm/join", status_code=201)
-def swarm_join(payload: JoinRequest, request: Request):
-    """The Edge Client hits this endpoint upon achieving GPS lock."""
-    reg = _registry(request)
-    test_mode = getattr(request.app.state, "test_mode", False)
-    
-    # Dynamic KOORDINATE path assignment
-    waypoints, target_alt = generate_square_patrol_path(payload.homeLocation, test_mode)
-    final_yaw = 0
-    
-    drone_data = {
-        "homeLocation": payload.homeLocation.model_dump(),
-        "path": waypoints,
-        "finalYaw": final_yaw,
-        "targetAltitude": target_alt
-    }
-    reg.add_or_update(payload.id, drone_data)
-    
-    log.info(f"Assigned patrol path to {payload.id} with {len(waypoints)} waypoints.")
-    
-    return {
-        "status": "joined",
-        "path": waypoints,
-        "finalYaw": final_yaw,
-        "targetAltitude": target_alt
-    }
+@router.post("/api/prompt", status_code=200)
+def set_master_prompt(payload: PromptRequest, request: Request):
+    """Updates the centralized SAM tracking prompt across the entire swarm."""
+    daemon = getattr(request.app.state, "vision_daemon", None)
+    if daemon:
+        daemon.set_prompt(payload.prompt)
+    return {"status": "ok"}
 
-@router.post("/api/swarm/{uuid}/telemetry")
-async def swarm_telemetry(uuid: str, request: Request):
-    """Edge client posts live JSON telemetry here natively."""
+swarm_sockets: Dict[str, WebSocket] = {}
+
+def broadcast_swarm_paths(app_state: Any):
+    reg = app_state.registry
+    drones_list = reg.list()
+    
+    if not drones_list:
+        return
+        
+    pathing_input = []
+    for d in drones_list:
+        home_loc = d.get("homeLocation", {})
+        path_lat = home_loc.get("latitude", home_loc.get("lat", d.get("lat", 0)))
+        path_lng = home_loc.get("longitude", home_loc.get("lon", d.get("lng", 0)))
+        
+        pathing_input.append({
+            "id": d["id"],
+            "lat": path_lat,
+            "lng": path_lng,
+            "reach": 800
+        })
+        
+    result = compute_paths(pathing_input, stripe_spacing=40, sweep_dir='ew')
+    paths = result["paths"]
+    
+    for drone_id, waypoints in paths.items():
+        if drone_id in swarm_sockets:
+            # Inject fixed altitude
+            fmt_waypoints = [{"lat": pt[0], "lon": pt[1], "alt": 200.0} for pt in waypoints]
+            if not fmt_waypoints:
+                continue # Sometimes drone gets blocked out from grid, skip assigning.
+                
+            reg.add_or_update(drone_id, {"path": fmt_waypoints})
+            
+            asyncio.create_task(swarm_sockets[drone_id].send_json({
+                "action": "path_update",
+                "waypoints": fmt_waypoints,
+                "targetAltitude": 200.0
+            }))
+
+@router.websocket("/ws/swarm/{uuid}")
+async def ws_swarm(uuid: str, ws: WebSocket):
+    await ws.accept()
+    swarm_sockets[uuid] = ws
+    reg = ws.app.state.registry
+    test_mode = getattr(ws.app.state, "test_mode", False)
+    
     try:
-        telemetry_data = await request.json()
-        _registry(request).update_telemetry(uuid, telemetry_data)
+        while True:
+            data = await ws.receive_json()
+            action = data.get("action")
+            
+            if action == "join":
+                home_dict = data.get("homeLocation", {})
+                lat = home_dict.get("latitude", 0)
+                lng = home_dict.get("longitude", 0)
+                
+                # Add to registry immediately
+                reg.add_or_update(uuid, {
+                    "homeLocation": home_dict,
+                    "lat": lat,
+                    "lng": lng
+                })
+                
+                if test_mode:
+                    # In test mode we just assign simple local boxes
+                    home = LocationModel(**home_dict)
+                    waypoints, target_alt = generate_square_patrol_path(home, True)
+                    reg.add_or_update(uuid, {"path": waypoints})
+                    await ws.send_json({
+                        "action": "path_update",
+                        "waypoints": waypoints,
+                        "targetAltitude": target_alt
+                    })
+                else:
+                    # Trigger the massive algorithmic swarm allocation
+                    broadcast_swarm_paths(ws.app.state)
+                    
+            elif action == "telemetry":
+                tel = data.get("data", {})
+                reg.update_telemetry(uuid, tel)
+                
+    except WebSocketDisconnect:
+        pass
     except Exception as e:
-        log.warning(f"Telemetry parse error from {uuid}: {e}")
-        return Response(status_code=400)
-    return Response(status_code=204)
+        log.warning(f"Swarm WS error {uuid}: {e}")
+    finally:
+        if uuid in swarm_sockets:
+            del swarm_sockets[uuid]
+        reg.remove(uuid)
+        if not test_mode:
+            broadcast_swarm_paths(ws.app.state)
 
 @router.post("/api/swarm/{uuid}/video")
 async def swarm_video(uuid: str, request: Request):
@@ -119,13 +186,6 @@ async def swarm_video(uuid: str, request: Request):
     
     _registry(request).update_video(uuid, body)
     return Response(status_code=204)
-
-@router.delete("/api/swarm/{uuid}/leave")
-def swarm_leave(uuid: str, request: Request):
-    """Edge client deregisters from the swarm."""
-    if not _registry(request).remove(uuid):
-        raise HTTPException(status_code=404, detail="Unknown drone")
-    return {"status": "left"}
 
 # ── Dashboard WebSocket ──────────────────────────────────────────────
 

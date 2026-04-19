@@ -73,6 +73,7 @@ parser.add_argument("--lat", type=float, default=46.0569, help="Initial mock lat
 parser.add_argument("--lng", type=float, default=14.5058, help="Initial mock longitude")
 parser.add_argument("--port-http", type=int, default=8080)
 parser.add_argument("--port-tcp", type=int, default=8081)
+parser.add_argument("--image-folder", type=str, default="", help="Path to folder containing png/jpg frames to loop if camera is locked")
 args = parser.parse_args()
 
 STATE = MockState(lat=args.lat, lng=args.lng, alt=0.0)
@@ -182,22 +183,55 @@ async def enable_vs():
 
 @app.get("/video")
 async def mjpeg_webcam():
-    """Streams local webcam via OpenCV as MJPEG"""
+    """Streams local webcam via OpenCV as MJPEG, or cycles local images, or dummy frame fallback."""
+    import os
+    import itertools
+    import numpy as np
+    
     def gen():
         cap = get_global_cap()
         
         # Test if camera opened
         if not cap.isOpened():
-             # If camera failed, fallback to a dummy image generator so the client doesn't crash
-             while True:
-                 import numpy as np
-                 img = np.zeros((480, 640, 3), dtype=np.uint8)
-                 cv2.putText(img, "Mock Camera Failed", (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
-                 _, buffer = cv2.imencode('.jpg', img)
-                 yield (b"--frame\r\n"
-                        b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n")
-                 time.sleep(1.0)
-             return
+            # Check if user specified a valid fallback image folder
+            if args.image_folder and os.path.exists(args.image_folder):
+                valid_exts = ('.png', '.jpg', '.jpeg')
+                files = [os.path.join(args.image_folder, f) for f in os.path.sorted(os.listdir(args.image_folder)) if f.lower().endswith(valid_exts)]
+                
+                if files:
+                    print(f"[Camera Null] Looping {len(files)} fallback images from {args.image_folder}")
+                    # Pre-load frames or stream them off disk? Off disk is fine for testing
+                    image_iterator = itertools.cycle(files)
+                    for file_path in image_iterator:
+                        try:
+                            frame = cv2.imread(file_path)
+                            if frame is not None:
+                                _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 65])
+                                yield (b"--frame\r\n"
+                                       b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n")
+                        except Exception:
+                            pass
+                        time.sleep(0.1) # Max 10FPS
+                    return
+        
+            # If no camera and no folder, fallback to dynamic synthetic dummy
+            x, y = 50, 240
+            dx, dy = 10, 5
+            while True:
+                img = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(img, f"Mock Camera Failed ({args.port_http})", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,100,100), 2)
+                cv2.putText(img, f"Time: {time.time():.2f}", (50, 400), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200,200,200), 1)
+                
+                x += dx
+                y += dy
+                if x < 10 or x > 250: dx *= -1
+                if y < 40 or y > 460: dy *= -1
+                
+                _, buffer = cv2.imencode('.jpg', img)
+                yield (b"--frame\r\n"
+                       b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n")
+                time.sleep(0.1)
+            return
 
         try:
             while True:

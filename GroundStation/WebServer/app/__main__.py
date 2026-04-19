@@ -31,7 +31,7 @@ def main():
 
     mode_str = "TEST MODE" if args.test else "PRODUCTION MODE"
     print(f"Serving Passive ARGUS Hub ({mode_str}) on http://{args.host}:{args.port}")
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info", access_log=False)
 
 if __name__ == "__main__":
     main()

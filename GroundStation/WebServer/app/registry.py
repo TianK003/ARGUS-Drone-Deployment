@@ -6,9 +6,13 @@ from __future__ import annotations
 
 import logging
 import threading
+import random
 from typing import Dict, Optional, List
 
 log = logging.getLogger(__name__)
+
+# vibrant colors
+PALETTE = ['#00E676', '#58a6ff', '#f778ba', '#d29922', '#a371f7', '#ff7b72', '#39c5cf', '#e3b341', '#bc8cff', '#FF4081']
 
 class DroneRegistry:
     def __init__(self):
@@ -18,8 +22,10 @@ class DroneRegistry:
     def add_or_update(self, drone_id: str, data: dict) -> dict:
         with self._lock:
             if drone_id not in self._drones:
+                assigned_color = random.choice(PALETTE)
                 self._drones[drone_id] = {
                     "id": drone_id,
+                    "color": assigned_color,
                     "homeLocation": data.get("homeLocation", {}),
                     "telemetry": {},
                     "latest_frame": None,

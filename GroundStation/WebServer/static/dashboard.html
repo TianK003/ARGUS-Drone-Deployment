@@ -307,9 +307,10 @@
       
       const batt = drone.telemetry?.batteryLevel || 0;
       const alt = drone.telemetry?.location?.altitude || 0;
+      const cardColor = drone.color || 'var(--accent)';
       
       return `
-        <div class="drone-card" id="card-${id}">
+        <div class="drone-card" id="card-${id}" style="border-left: 3px solid ${cardColor};">
             <div class="drone-card-header">
                 <span class="drone-id">${id}</span>
                 <span class="status-badge">LIVE</span>
@@ -351,18 +352,30 @@
               }
 
               // Update or Create the Map Marker
+              const markerColor = d.color || '#00E676';
+              const markerHtml = `<div style="background-color: ${markerColor}; border: 2px solid white; border-radius: 50%; box-shadow: 0 0 10px ${markerColor}; width: 14px; height: 14px;"></div>`;
+              
               if (droneMarkers[d.id]) {
                   droneMarkers[d.id].setLatLng([c_lat, c_lng]);
+                  droneMarkers[d.id].setIcon(L.divIcon({html: markerHtml, className: '', iconSize: [14, 14]}));
               } else {
                   droneMarkers[d.id] = L.marker([c_lat, c_lng], {
-                      icon: L.divIcon({className: 'drone-marker', iconSize: [14, 14]})
+                      icon: L.divIcon({html: markerHtml, className: '', iconSize: [14, 14]})
                   }).addTo(map);
               }
 
               // Update or Create the Map Patrol Path line
-              if (!dronePaths[d.id] && d.path && d.path.length > 0) {
+              if (d.path && d.path.length > 0) {
                   const pts = d.path.map(p => [p.lat, p.lon]);
-                  dronePaths[d.id] = L.polyline(pts, {color: 'rgba(0,230,118,0.7)', weight: 2, dashArray: '5,5'}).addTo(map);
+                  if (dronePaths[d.id]) {
+                      dronePaths[d.id].setLatLngs(pts);
+                      dronePaths[d.id].setStyle({color: markerColor});
+                  } else {
+                      dronePaths[d.id] = L.polyline(pts, {color: markerColor, weight: 2, dashArray: '5,5'}).addTo(map);
+                  }
+              } else if (dronePaths[d.id]) {
+                  map.removeLayer(dronePaths[d.id]);
+                  delete dronePaths[d.id];
               }
 
               // Update UI Card (Only create if missing so we don't reload the <img> tag)
@@ -404,9 +417,13 @@
 
   function setPrompt() {
       const p = document.getElementById('samPrompt').value;
-      if (p) {
+      if (p !== undefined) { // Allow empty string to clear the tracker
           console.log("Setting Master Prompt for server SAM loop:", p);
-          // In actual implementation, send this to a global config endpoint
+          fetch('/api/prompt', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({prompt: p})
+          }).catch(e => console.error("Prompt failed to send:", e));
       }
   }
 

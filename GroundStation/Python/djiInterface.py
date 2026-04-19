@@ -51,14 +51,14 @@ class DJIInterface:
     TCP telemetry socket (port 8081).
     """
     
-    def __init__(self, IP_RC=""):
+    def __init__(self, IP_RC="", port_http=8080, port_tcp=8081):
         self.IP_RC = IP_RC
-        self.baseCommandUrl = f"http://{IP_RC}:8080"
-        self.telemetryPort = 8081
+        self.baseCommandUrl = f"http://{IP_RC}:{port_http}"
+        self.telemetryPort = port_tcp
         
         # Support Mock API for rapid prototyping without physical hardware
-        if self.IP_RC in ["127.0.0.1", "localhost", "0.0.0.0"]:
-            self.videoSource = f"http://{self.IP_RC}:8080/video"
+        if self.IP_RC in ["127.0.0.1", "localhost", "0.0.0.0"] or self.IP_RC.startswith("127."):
+            self.videoSource = f"http://{self.IP_RC}:{port_http}/video"
         else:
             self.videoSource = f"rtsp://aaa:aaa@{self.IP_RC}:8554/streaming/live/1"
                     

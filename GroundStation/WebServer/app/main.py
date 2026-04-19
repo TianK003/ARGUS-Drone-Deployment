@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .registry import DroneRegistry
 from .routes import router
+from .vision import VisionDaemon
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -24,9 +25,13 @@ def create_app(registry: DroneRegistry) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        daemon = VisionDaemon(registry)
+        daemon.start()
+        app.state.vision_daemon = daemon
         try:
             yield
         finally:
+            daemon.stop()
             registry.shutdown()
 
     app = FastAPI(
