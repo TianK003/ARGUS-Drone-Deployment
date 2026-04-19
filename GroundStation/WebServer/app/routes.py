@@ -1,328 +1,130 @@
-"""HTTP + WebSocket routes for the ARGUS Hub."""
+"""
+Passive HTTP & WebSocket routes for the Edge-Driven ARGUS Hub.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from .registry import DroneEntry, DroneRegistry
+from .registry import DroneRegistry
 
 log = logging.getLogger(__name__)
 
 router = APIRouter()
 
-FORWARD_INTERVAL = 0.05   # seconds — 20 Hz cap for WS-driven stick forwarding
-DEADMAN_TIMEOUT = 0.5     # seconds — stop drone if no WS input for this long
-TELEMETRY_FANOUT_INTERVAL = 1.0  # seconds — per-drone snapshot rate on /ws/drones
-
+TELEMETRY_FANOUT_INTERVAL = 1.0  # seconds
 
 # ── Pydantic models ──────────────────────────────────────────────────
 
-class StickCommand(BaseModel):
-    leftX: float = Field(0.0, ge=-1.0, le=1.0)
-    leftY: float = Field(0.0, ge=-1.0, le=1.0)
-    rightX: float = Field(0.0, ge=-1.0, le=1.0)
-    rightY: float = Field(0.0, ge=-1.0, le=1.0)
+class LocationModel(BaseModel):
+    latitude: float
+    longitude: float
 
-
-class DroneCreate(BaseModel):
-    id: str = Field(..., min_length=1, max_length=40, pattern=r"^[A-Za-z0-9_-]+$")
-    label: Optional[str] = None
-    rc_ip: str = Field(..., min_length=1)
-    home_lat: Optional[float] = None
-    home_lng: Optional[float] = None
-    # reach_m is optional at registration — the dashboard picks it via a
-    # post-placement slider and can PATCH it any time afterwards.
-    reach_m: Optional[int] = Field(None, ge=50)
-    mock: bool = False
-    enable_video: bool = True
-
-
-class DroneUpdate(BaseModel):
-    label: Optional[str] = None
-    reach_m: Optional[int] = Field(None, ge=50, le=10000)
-    home_lat: Optional[float] = None
-    home_lng: Optional[float] = None
-
+class JoinRequest(BaseModel):
+    id: str
+    homeLocation: LocationModel
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
 def _registry(request: Request) -> DroneRegistry:
     return request.app.state.registry
 
+def generate_square_patrol_path(home: LocationModel) -> list:
+    """Generate a simple square 50-meter radius patrol around home for demonstration."""
+    lat, lng = home.latitude, home.longitude
+    # Roughly 50 meters in degrees
+    d_lat = 0.00045 
+    d_lng = 0.00065
+    alt = 30 # 30m altitude
+    return [
+        {"lat": lat + d_lat, "lon": lng + d_lng, "alt": alt},
+        {"lat": lat + d_lat, "lon": lng - d_lng, "alt": alt},
+        {"lat": lat - d_lat, "lon": lng - d_lng, "alt": alt},
+        {"lat": lat - d_lat, "lon": lng + d_lng, "alt": alt},
+        {"lat": lat + d_lat, "lon": lng + d_lng, "alt": alt}
+    ]
 
-def _entry(request: Request, drone_id: str) -> DroneEntry:
-    reg = _registry(request)
-    entry = reg.get(drone_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail=f"unknown drone: {drone_id}")
-    entry.ensure_started()
-    return entry
-
-
-def _telemetry_snapshot(entry: DroneEntry) -> dict:
-    """Best-effort snapshot for dashboard display."""
-    snap = {
-        "id": entry.id,
-        "label": entry.label,
-        "rc_ip": entry.rc_ip,
-        "mock": entry.mock,
-        "home_lat": entry.home_lat,
-        "home_lng": entry.home_lng,
-        "reach_m": entry.reach_m,
-    }
-    client = getattr(entry, "client", None)
-    video = getattr(entry, "video", None)
-
-    # LiveDroneClient wraps a DJIInterface exposing lat/lon/battery/etc.
-    dji = getattr(client, "_dji", None)
-    if dji is not None:
-        for method, key in (
-            ("getLocation", "location"),
-            ("getAttitude", "attitude"),
-            ("getBatteryLevel", "battery"),
-            ("getSpeed", "speed"),
-            ("getHeading", "heading"),
-        ):
-            fn = getattr(dji, method, None)
-            if not callable(fn):
-                continue
-            try:
-                snap[key] = fn()
-            except Exception:
-                snap[key] = None
-
-    # Normalize: if we have a location, also flatten into lat/lng for the map.
-    loc = snap.get("location")
-    if isinstance(loc, dict):
-        snap["lat"] = loc.get("lat") or loc.get("latitude")
-        snap["lng"] = loc.get("lng") or loc.get("lon") or loc.get("longitude")
-    elif isinstance(loc, (list, tuple)) and len(loc) >= 2:
-        snap["lat"], snap["lng"] = loc[0], loc[1]
-
-    if snap.get("lat") is None and entry.home_lat is not None:
-        snap["lat"] = entry.home_lat
-        snap["lng"] = entry.home_lng
-
-    if video is not None:
-        try:
-            vstat = video.status()
-        except Exception:
-            vstat = {"connected": False, "mode": "unknown"}
-        snap["video"] = vstat
-        snap["online"] = bool(vstat.get("connected")) or entry.mock
-    else:
-        snap["video"] = None
-        snap["online"] = entry.mock
-
-    return snap
-
-
-# ── Health / registry CRUD ───────────────────────────────────────────
+# ── Endpoints ────────────────────────────────────────────────────────
 
 @router.get("/api/health")
 def health(request: Request):
-    reg = _registry(request)
-    return {"ok": True, "drones": [e.id for e in reg.list()]}
-
+    return {"ok": True, "active_drones": len(_registry(request).list())}
 
 @router.get("/api/drones")
 def list_drones(request: Request):
-    reg = _registry(request)
-    return {"drones": [_telemetry_snapshot(e) for e in reg.list()]}
+    """Retrieve all drone state for the dashboard."""
+    return {"drones": _registry(request).list()}
 
-
-@router.post("/api/drones", status_code=201)
-def add_drone(payload: DroneCreate, request: Request):
+@router.post("/api/swarm/join", status_code=201)
+def swarm_join(payload: JoinRequest, request: Request):
+    """The Edge Client hits this endpoint upon achieving GPS lock."""
     reg = _registry(request)
-    defaults = request.app.state.defaults
-    entry = DroneEntry(
-        id=payload.id,
-        label=payload.label or payload.id,
-        rc_ip=payload.rc_ip,
-        home_lat=payload.home_lat,
-        home_lng=payload.home_lng,
-        reach_m=payload.reach_m if payload.reach_m is not None else 800,
-        mock=payload.mock or bool(defaults.get("mock")),
-        max_stick=float(defaults.get("max_stick", 0.3)),
-        enable_video=payload.enable_video and not bool(defaults.get("no_video")),
-    )
+    
+    # Simple dynamic KOORDINATE path assignment
+    waypoints = generate_square_patrol_path(payload.homeLocation)
+    final_yaw = 0
+    
+    drone_data = {
+        "homeLocation": payload.homeLocation.model_dump(),
+        "path": waypoints,
+        "finalYaw": final_yaw
+    }
+    reg.add_or_update(payload.id, drone_data)
+    
+    log.info(f"Assigned patrol path to {payload.id} with {len(waypoints)} waypoints.")
+    
+    return {
+        "status": "joined",
+        "path": waypoints,
+        "finalYaw": final_yaw
+    }
+
+@router.post("/api/swarm/{uuid}/telemetry")
+async def swarm_telemetry(uuid: str, request: Request):
+    """Edge client posts live JSON telemetry here natively."""
     try:
-        reg.add(entry)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    return _telemetry_snapshot(entry)
-
-
-@router.delete("/api/drones/{drone_id}", status_code=204)
-def delete_drone(drone_id: str, request: Request):
-    if not _registry(request).remove(drone_id):
-        raise HTTPException(status_code=404, detail=f"unknown drone: {drone_id}")
+        telemetry_data = await request.json()
+        _registry(request).update_telemetry(uuid, telemetry_data)
+    except Exception as e:
+        log.warning(f"Telemetry parse error from {uuid}: {e}")
+        return Response(status_code=400)
     return Response(status_code=204)
 
+@router.post("/api/swarm/{uuid}/video")
+async def swarm_video(uuid: str, request: Request):
+    """Edge client posts absolute newest JPEG bytes here natively."""
+    body = await request.body()
+    if not body:
+        return Response(status_code=400, content="Empty body")
+    
+    _registry(request).update_video(uuid, body)
+    return Response(status_code=204)
 
-@router.get("/api/drones/{drone_id}")
-def get_drone(drone_id: str, request: Request):
-    return _telemetry_snapshot(_entry(request, drone_id))
+@router.delete("/api/swarm/{uuid}/leave")
+def swarm_leave(uuid: str, request: Request):
+    """Edge client deregisters from the swarm."""
+    if not _registry(request).remove(uuid):
+        raise HTTPException(status_code=404, detail="Unknown drone")
+    return {"status": "left"}
 
-
-@router.patch("/api/drones/{drone_id}")
-def update_drone(drone_id: str, payload: DroneUpdate, request: Request):
-    reg = _registry(request)
-    entry = reg.get(drone_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail=f"unknown drone: {drone_id}")
-    if payload.label is not None:
-        entry.label = payload.label
-    if payload.reach_m is not None:
-        entry.reach_m = payload.reach_m
-    if payload.home_lat is not None:
-        entry.home_lat = payload.home_lat
-    if payload.home_lng is not None:
-        entry.home_lng = payload.home_lng
-    reg.persist()
-    return _telemetry_snapshot(entry)
-
-
-# ── Per-drone control ────────────────────────────────────────────────
-
-@router.post("/api/drones/{drone_id}/virtual-stick/enable")
-async def virtual_stick_enable(drone_id: str, request: Request):
-    entry = _entry(request, drone_id)
-    resp = await asyncio.to_thread(entry.client.enable_virtual_stick)
-    return {"response": resp}
-
-
-@router.post("/api/drones/{drone_id}/virtual-stick/disable")
-async def virtual_stick_disable(drone_id: str, request: Request):
-    entry = _entry(request, drone_id)
-    resp = await asyncio.to_thread(entry.client.disable_virtual_stick)
-    return {"response": resp}
-
-
-@router.post("/api/drones/{drone_id}/stick")
-async def send_stick(drone_id: str, cmd: StickCommand, request: Request):
-    entry = _entry(request, drone_id)
-    resp = await asyncio.to_thread(
-        entry.client.send_stick, cmd.leftX, cmd.leftY, cmd.rightX, cmd.rightY
-    )
-    return {"response": resp}
-
-
-@router.post("/api/drones/{drone_id}/takeoff")
-async def takeoff(drone_id: str, request: Request):
-    entry = _entry(request, drone_id)
-    return {"response": await asyncio.to_thread(entry.client.takeoff)}
-
-
-@router.post("/api/drones/{drone_id}/land")
-async def land(drone_id: str, request: Request):
-    entry = _entry(request, drone_id)
-    return {"response": await asyncio.to_thread(entry.client.land)}
-
-
-@router.post("/api/drones/{drone_id}/rth")
-async def rth(drone_id: str, request: Request):
-    entry = _entry(request, drone_id)
-    return {"response": await asyncio.to_thread(entry.client.rth)}
-
-
-# ── Per-drone stick WebSocket ────────────────────────────────────────
-
-@router.websocket("/ws/drones/{drone_id}/stick")
-async def ws_stick(ws: WebSocket, drone_id: str):
-    """
-    Continuous stream of {leftX, leftY, rightX, rightY} → RC at ≤20 Hz.
-    Deadman: 500 ms of silence zeros the sticks once; on disconnect we
-    always send one zero-stick packet as a final safety stop.
-    """
-    reg: DroneRegistry = ws.app.state.registry
-    entry = reg.get(drone_id)
-    if entry is None:
-        await ws.close(code=4404, reason=f"unknown drone: {drone_id}")
-        return
-    entry.ensure_started()
-    client = entry.client
-
-    await ws.accept()
-
-    latest = {"leftX": 0.0, "leftY": 0.0, "rightX": 0.0, "rightY": 0.0}
-    last_input_ts = time.time()
-    last_sent_ts = 0.0
-    stopped = True
-
-    async def forwarder():
-        nonlocal last_sent_ts, stopped
-        while True:
-            await asyncio.sleep(FORWARD_INTERVAL)
-            now = time.time()
-
-            if now - last_input_ts > DEADMAN_TIMEOUT:
-                if not stopped:
-                    await asyncio.to_thread(client.send_stick, 0.0, 0.0, 0.0, 0.0)
-                    stopped = True
-                continue
-
-            if now - last_sent_ts < FORWARD_INTERVAL:
-                continue
-
-            all_zero = not any(latest.values())
-            if all_zero and stopped:
-                continue
-
-            await asyncio.to_thread(
-                client.send_stick,
-                latest["leftX"], latest["leftY"],
-                latest["rightX"], latest["rightY"],
-            )
-            last_sent_ts = now
-            stopped = all_zero
-
-    task = asyncio.create_task(forwarder())
-    try:
-        while True:
-            msg = await ws.receive_json()
-            try:
-                latest["leftX"] = float(msg.get("leftX", 0.0))
-                latest["leftY"] = float(msg.get("leftY", 0.0))
-                latest["rightX"] = float(msg.get("rightX", 0.0))
-                latest["rightY"] = float(msg.get("rightY", 0.0))
-            except (TypeError, ValueError):
-                continue
-            last_input_ts = time.time()
-    except WebSocketDisconnect:
-        pass
-    except Exception as exc:
-        log.warning("ws_stick[%s] error: %s", drone_id, exc)
-    finally:
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
-        try:
-            await asyncio.to_thread(client.send_stick, 0.0, 0.0, 0.0, 0.0)
-        except Exception as exc:
-            log.warning("ws_stick[%s] final safety-stop failed: %s", drone_id, exc)
-
-
-# ── Dashboard telemetry fan-out ──────────────────────────────────────
+# ── Dashboard WebSocket ──────────────────────────────────────────────
 
 @router.websocket("/ws/drones")
 async def ws_drones(ws: WebSocket):
-    """1 Hz fan-out of telemetry snapshots for the map dashboard."""
+    """1 Hz fan-out of telemetry snapshots to the UI."""
     await ws.accept()
     reg: DroneRegistry = ws.app.state.registry
 
     try:
         while True:
-            snapshots = [_telemetry_snapshot(e) for e in reg.list()]
+            snapshots = reg.list()
             await ws.send_json({"ts": time.time(), "drones": snapshots})
             await asyncio.sleep(TELEMETRY_FANOUT_INTERVAL)
     except WebSocketDisconnect:
@@ -331,56 +133,38 @@ async def ws_drones(ws: WebSocket):
         log.warning("ws_drones error: %s", exc)
 
 
-# ── Per-drone video ──────────────────────────────────────────────────
+# ── MJPEG Video Streamer for UI ──────────────────────────────────────
 
 MJPEG_BOUNDARY = "frame"
 
-
-def _video(entry: DroneEntry):
-    v = getattr(entry, "video", None)
-    if v is None:
-        raise HTTPException(status_code=503, detail=f"video not enabled for {entry.id}")
-    return v
-
-
-@router.get("/api/drones/{drone_id}/video/status")
-def video_status(drone_id: str, request: Request):
-    return _video(_entry(request, drone_id)).status()
-
-
-@router.get("/api/drones/{drone_id}/video/snapshot.jpg")
-def video_snapshot(drone_id: str, request: Request):
-    v = _video(_entry(request, drone_id))
-    jpeg, ts = v.get_latest_jpeg()
-    if jpeg is None:
-        raise HTTPException(status_code=503, detail="no frame yet")
-    return Response(
-        content=jpeg,
-        media_type="image/jpeg",
-        headers={"Cache-Control": "no-store", "X-Frame-Timestamp": f"{ts:.3f}"},
-    )
-
-
-@router.get("/api/drones/{drone_id}/video.mjpg")
-async def video_mjpeg(drone_id: str, request: Request):
-    """Multipart MJPEG stream consumed by the browser <img>."""
-    v = _video(_entry(request, drone_id))
+@router.get("/api/swarm/{uuid}/video.mjpg")
+async def get_video_stream(uuid: str, request: Request):
+    """Dashboard UI consumes this multipart stream to show the latest frame."""
+    reg = _registry(request)
 
     async def gen():
-        last_ts = 0.0
         boundary = f"--{MJPEG_BOUNDARY}".encode()
+        last_frame_ref = None
+        
         while True:
             if await request.is_disconnected():
                 return
-            jpeg, ts = v.get_latest_jpeg()
-            if jpeg is None or ts == last_ts:
-                await asyncio.sleep(0.02)
+                
+            entry = reg.get(uuid)
+            if not entry:
+                await asyncio.sleep(1.0)
                 continue
-            last_ts = ts
+                
+            current_frame = entry.get("latest_frame")
+            if not current_frame or current_frame is last_frame_ref:
+                await asyncio.sleep(0.05)
+                continue
+                
+            last_frame_ref = current_frame
             yield boundary + b"\r\n"
             yield b"Content-Type: image/jpeg\r\n"
-            yield f"Content-Length: {len(jpeg)}\r\n\r\n".encode()
-            yield jpeg
+            yield f"Content-Length: {len(current_frame)}\r\n\r\n".encode()
+            yield current_frame
             yield b"\r\n"
 
     return StreamingResponse(
@@ -388,34 +172,3 @@ async def video_mjpeg(drone_id: str, request: Request):
         media_type=f"multipart/x-mixed-replace; boundary={MJPEG_BOUNDARY}",
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
     )
-
-
-# ── Mission plans (stub persistence) ─────────────────────────────────
-
-class PlanSave(BaseModel):
-    name: Optional[str] = None
-    drones: list = Field(default_factory=list)
-    paths: dict = Field(default_factory=dict)
-    params: dict = Field(default_factory=dict)
-
-
-@router.post("/api/plans", status_code=201)
-def save_plan(payload: PlanSave, request: Request):
-    """Persist a planned mission (drone placements + Boustrophedon paths) as JSON."""
-    from pathlib import Path
-    import json
-
-    plans_dir: Path = request.app.state.plans_dir
-    plans_dir.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    name = payload.name or f"plan-{stamp}"
-    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
-    path = plans_dir / f"{safe}.json"
-    path.write_text(
-        json.dumps(
-            {"saved_at": time.time(), "name": name, **payload.model_dump()},
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    return {"name": name, "path": str(path)}
