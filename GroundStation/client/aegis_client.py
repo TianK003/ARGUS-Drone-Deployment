@@ -6,6 +6,7 @@ import uuid
 import threading
 import requests
 import cv2
+import math
 
 # Ensure we can import the DJIInterface from the GroundStation module
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -59,18 +60,28 @@ def push_video_loop(dji):
     cap = cv2.VideoCapture(video_source)
     url = f"{SERVER_URL}/api/swarm/{DRONE_ID}/video"
     
+    fail_count = 0
     while is_running:
         ret, frame = cap.read()
         if not ret:
-            time.sleep(0.1)
+            fail_count += 1
+            if fail_count > 10:
+                print("[Video Thread] Stream lost. Reconnecting to video source...")
+                cap.release()
+                time.sleep(1)
+                cap = cv2.VideoCapture(video_source)
+                fail_count = 0
+            else:
+                time.sleep(0.1)
             continue
+            
+        fail_count = 0
             
         # Encode frame as JPEG
         _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
         
         try:
-            # Pushing individual frames via POST for simplicity, 
-            # to be upgraded to WebSockets or WebRTC later as requested.
+            # Pushing individual frames via POST for simplicity
             requests.post(url, data=buffer.tobytes(), headers={'Content-Type': 'image/jpeg'}, timeout=1)
         except requests.RequestException:
             pass # Ignore dropped frames
@@ -119,7 +130,8 @@ def main():
         data = response.json()
         path = data.get("path", [])
         final_yaw = data.get("finalYaw", 0)
-        print(f"Successfully joined swarm. Received path with {len(path)} waypoints.")
+        target_altitude = float(data.get("targetAltitude", 200.0))
+        print(f"Successfully joined swarm. Received path with {len(path)} waypoints (Alt: {target_altitude}m).")
     except Exception as e:
         print(f"Failed to join swarm on server: {e}")
         print("Cannot continue without assigned path. Exiting.")
@@ -129,7 +141,8 @@ def main():
     # Convert path to tuples for the DJI Interface (lat, lon, alt)
     # Assuming the server returns [{"lat": x, "lon": y, "alt": z}, ...]
     try:
-        waypoints = [(p["lat"], p.get("lon", p.get("lng")), p.get("alt", 20)) for p in path]
+        # Force the patrol altitude to whatever the server commanded
+        waypoints = [(p["lat"], p.get("lon", p.get("lng")), target_altitude) for p in path]
     except KeyError as e:
         print(f"Invalid path format received from server. Missing key: {e}")
         dji.stopTelemetryStream()
@@ -145,18 +158,64 @@ def main():
     print("Mission Started. Pushing telemetry and video...")
     
     try:
+        print(f"Taking off and ascending to {target_altitude}m...")
+        try:
+            dji.requestSendTakeOff()
+            time.sleep(3) # Initial delay for takeoff buffer
+            dji.requestSendGotoAltitude(target_altitude)
+            time.sleep(2) # Brief spacing before trajectory command
+        except Exception as e:
+            print(f"Failed to execute initial takeoff and ascend: {e}")
+
         if waypoints:
-            print("Sending path to Drone...")
+            print("Sending patrol trajectory to Drone...")
             try:
                 dji.requestSendNavigateTrajectory(waypoints, final_yaw)
             except Exception as e:
                 print(f"Failed to send trajectory to drone native API: {e}")
+                
+            current_trajectory = waypoints
+            
+            # Active Patrol Loop
+            def get_distance(lat1, lon1, lat2, lon2):
+                R = 6371e3
+                d_lat = math.radians(lat2 - lat1)
+                d_lon = math.radians(lon2 - lon1)
+                a = math.sin(d_lat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(d_lon/2)**2
+                return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+
+            while True:
+                time.sleep(2)
+                
+                # Safety Battery Check
+                bat = dji.getBatteryLevel()
+                if 0 < bat < 20: 
+                    print(f"CRITICAL: Battery low ({bat}%). Aborting patrol sequence.")
+                    break # Break loop to trigger finally RTH block
+                    
+                # Waypoint End Detection
+                loc = dji.getLocation()
+                if loc and loc.get("latitude") and loc.get("longitude"):
+                    lat = loc["latitude"]
+                    lon = loc["longitude"]
+                    
+                    target_lat = current_trajectory[-1][0]
+                    target_lon = current_trajectory[-1][1]
+                    
+                    dist = get_distance(lat, lon, target_lat, target_lon)
+                    if dist < 0.5:
+                        print(f"Reached end of path segment (Dist: {dist:.1f}m). Reversing...")
+                        current_trajectory = current_trajectory[::-1]
+                        time.sleep(2) # Brief hover before turning
+                        try:
+                            dji.requestSendNavigateTrajectory(current_trajectory, final_yaw)
+                        except Exception as e:
+                            print(f"Failed to send reversed trajectory: {e}")
+                            break
         else:
             print("Warning: Received empty path from server. Holding position.")
-            
-        # Keep main thread alive
-        while True:
-            time.sleep(1)
+            while True:
+                time.sleep(1)
             
     except KeyboardInterrupt:
         print("\nShutdown signal received (Ctrl+C). Executing safe termination...")

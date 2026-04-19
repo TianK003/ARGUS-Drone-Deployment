@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import math
 from typing import Optional, Dict, Any
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -36,20 +37,29 @@ class JoinRequest(BaseModel):
 def _registry(request: Request) -> DroneRegistry:
     return request.app.state.registry
 
-def generate_square_patrol_path(home: LocationModel) -> list:
-    """Generate a simple square 50-meter radius patrol around home for demonstration."""
+def generate_square_patrol_path(home: LocationModel, test_mode: bool) -> tuple[list, float]:
+    """Generate a patrol square. 5x5m if test_mode, else larger 50m mock path until real koordinate integration."""
     lat, lng = home.latitude, home.longitude
-    # Roughly 50 meters in degrees
-    d_lat = 0.00045 
-    d_lng = 0.00065
-    alt = 30 # 30m altitude
-    return [
+    
+    if test_mode:
+        # approx 5x5m box (0.000045 degrees is roughly 5 meters at equator)
+        d_lat = 0.0000225 
+        d_lng = 0.0000225 / math.cos(math.radians(lat)) if lat else 0.0000225
+        alt = 10.0
+    else:
+        # 50m radius default
+        d_lat = 0.00045 
+        d_lng = 0.00065
+        alt = 200.0
+        
+    waypoints = [
         {"lat": lat + d_lat, "lon": lng + d_lng, "alt": alt},
         {"lat": lat + d_lat, "lon": lng - d_lng, "alt": alt},
         {"lat": lat - d_lat, "lon": lng - d_lng, "alt": alt},
         {"lat": lat - d_lat, "lon": lng + d_lng, "alt": alt},
         {"lat": lat + d_lat, "lon": lng + d_lng, "alt": alt}
     ]
+    return waypoints, alt
 
 # ── Endpoints ────────────────────────────────────────────────────────
 
@@ -66,15 +76,17 @@ def list_drones(request: Request):
 def swarm_join(payload: JoinRequest, request: Request):
     """The Edge Client hits this endpoint upon achieving GPS lock."""
     reg = _registry(request)
+    test_mode = getattr(request.app.state, "test_mode", False)
     
-    # Simple dynamic KOORDINATE path assignment
-    waypoints = generate_square_patrol_path(payload.homeLocation)
+    # Dynamic KOORDINATE path assignment
+    waypoints, target_alt = generate_square_patrol_path(payload.homeLocation, test_mode)
     final_yaw = 0
     
     drone_data = {
         "homeLocation": payload.homeLocation.model_dump(),
         "path": waypoints,
-        "finalYaw": final_yaw
+        "finalYaw": final_yaw,
+        "targetAltitude": target_alt
     }
     reg.add_or_update(payload.id, drone_data)
     
@@ -83,7 +95,8 @@ def swarm_join(payload: JoinRequest, request: Request):
     return {
         "status": "joined",
         "path": waypoints,
-        "finalYaw": final_yaw
+        "finalYaw": final_yaw,
+        "targetAltitude": target_alt
     }
 
 @router.post("/api/swarm/{uuid}/telemetry")

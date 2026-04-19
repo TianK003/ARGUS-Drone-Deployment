@@ -55,8 +55,13 @@ class DJIInterface:
         self.IP_RC = IP_RC
         self.baseCommandUrl = f"http://{IP_RC}:8080"
         self.telemetryPort = 8081
-        self.videoSource = f"rtsp://aaa:aaa@{self.IP_RC}:8554/streaming/live/1"
         
+        # Support Mock API for rapid prototyping without physical hardware
+        if self.IP_RC in ["127.0.0.1", "localhost", "0.0.0.0"]:
+            self.videoSource = f"http://{self.IP_RC}:8080/video"
+        else:
+            self.videoSource = f"rtsp://aaa:aaa@{self.IP_RC}:8554/streaming/live/1"
+                    
         # Telemetry state (updated via TCP socket)
         self._telemetry = {}
         self._telemetry_lock = threading.Lock()
