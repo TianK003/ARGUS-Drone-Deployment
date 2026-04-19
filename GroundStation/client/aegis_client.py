@@ -36,8 +36,11 @@ has_started_mission = False
 
 # Dynamic state variables controlled by Hub
 current_trajectory = []
-final_yaw = 0
 target_altitude = 30.0
+# Pure-pursuit lookahead distance (m). The one control-loop knob we can reach from Python
+# without rebuilding the Android app — it travels as the wire-format "finalYaw" field,
+# which the Kotlin side positionally binds to lookaheadDistance. MUST be non-zero.
+lookahead_distance = 5.5
 path_ready_event = threading.Event()
 ws_app: websocket.WebSocketApp = None
 dji: DJIInterface = None
@@ -101,26 +104,29 @@ def push_video_loop():
     cap.release()
 
 def on_ws_message(ws, message):
-    global current_trajectory, final_yaw, target_altitude
+    global current_trajectory, target_altitude, lookahead_distance
     data = json.loads(message)
-    
+
     if data.get("action") == "path_update":
         path = data.get("waypoints", [])
-        final_yaw = data.get("finalYaw", 0)
         target_altitude = float(data.get("targetAltitude", 30.0))
-        
-        print(f"\n[Hub] Received dynamic path update with {len(path)} waypoints (Alt: {target_altitude}m).")
-        
+        lookahead_distance = float(data.get("lookaheadDistance", 5.5))
+
+        print(
+            f"\n[Hub] Path update: {len(path)} waypoints "
+            f"(alt={target_altitude}m, lookahead={lookahead_distance}m)."
+        )
+
         new_traj = [(p["lat"], p.get("lon", p.get("lng")), target_altitude) for p in path]
         current_trajectory = new_traj
-        
+
         if not has_started_mission:
             path_ready_event.set()
         elif current_trajectory:
             # Dynamically divert the drone mid-flight
             print(">> Replanning active flight path...")
             try:
-                dji.requestSendNavigateTrajectory(current_trajectory, final_yaw)
+                dji.requestSendNavigateTrajectory(current_trajectory, lookahead_distance)
             except Exception as e:
                 print(f"Failed to redirect drone: {e}")
 
@@ -204,10 +210,18 @@ def main():
         if current_trajectory:
             print("Sending initial trajectory to Drone...")
             try:
-                dji.requestSendNavigateTrajectory(current_trajectory, final_yaw)
+                dji.requestSendNavigateTrajectory(current_trajectory, lookahead_distance)
             except Exception as e:
                 print(f"Failed to send trajectory: {e}")
-                
+
+            # Announce to the hub that the drone is flying so it doesn't re-allocate our path
+            # when another drone joins. The hub-side handler is in routes.ws_swarm ("mission_state").
+            if ws_app and ws_app.sock and ws_app.sock.connected:
+                try:
+                    ws_app.send(json.dumps({"action": "mission_state", "active": True}))
+                except Exception:
+                    pass
+
             def get_distance(lat1, lon1, lat2, lon2):
                 R = 6371e3
                 d_lat = math.radians(lat2 - lat1)
@@ -215,32 +229,53 @@ def main():
                 a = math.sin(d_lat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(d_lon/2)**2
                 return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
 
+            # Reversal state machine — see plans/i-did-my-test-shimmering-frog.md §"SECONDARY — aegis_client reversal".
+            # GPS noise on the Mini 3 Pro is ±2-4 m, so the old 0.5 m threshold fired on noise alone.
+            # The drone must sit within REVERSE_THRESHOLD_M for REVERSE_DWELL_SEC consecutive seconds
+            # before we reverse, and a cooldown prevents double-firing.
+            REVERSE_THRESHOLD_M  = 5.0
+            REVERSE_DWELL_SEC    = 4.0
+            REVERSE_COOLDOWN_SEC = 10.0
+            POLL_INTERVAL_SEC    = 1.0
+
+            near_end_since  = None
+            last_reverse_at = 0.0
+
             while True:
-                time.sleep(2)
-                
+                time.sleep(POLL_INTERVAL_SEC)
+
                 bat = dji.getBatteryLevel()
-                if 0 < bat < 20: 
+                if 0 < bat < 20:
                     print(f"CRITICAL: Battery low ({bat}%). Aborting patrol.")
                     break
-                    
+
                 loc = dji.getLocation()
-                if loc and loc.get("latitude") and loc.get("longitude") and current_trajectory:
-                    lat = loc["latitude"]
-                    lon = loc["longitude"]
-                    
-                    target_lat = current_trajectory[-1][0]
-                    target_lon = current_trajectory[-1][1]
-                    
-                    dist = get_distance(lat, lon, target_lat, target_lon)
-                    if dist < 5.0:
-                        print(f"Reached end of path segment (Dist: {dist:.1f}m). Reversing...")
+                if not (loc and loc.get("latitude") and loc.get("longitude") and current_trajectory):
+                    continue
+
+                lat = loc["latitude"]
+                lon = loc["longitude"]
+                target_lat = current_trajectory[-1][0]
+                target_lon = current_trajectory[-1][1]
+                dist = get_distance(lat, lon, target_lat, target_lon)
+
+                now = time.time()
+                if dist < REVERSE_THRESHOLD_M:
+                    if near_end_since is None:
+                        near_end_since = now
+                    dwell = now - near_end_since
+                    if dwell >= REVERSE_DWELL_SEC and (now - last_reverse_at) >= REVERSE_COOLDOWN_SEC:
+                        print(f"Reached end (dist={dist:.1f}m, dwell={dwell:.1f}s). Reversing.")
                         current_trajectory = current_trajectory[::-1]
-                        time.sleep(2)
                         try:
-                            dji.requestSendNavigateTrajectory(current_trajectory, final_yaw)
+                            dji.requestSendNavigateTrajectory(current_trajectory, lookahead_distance)
+                            last_reverse_at = now
+                            near_end_since  = None
                         except Exception as e:
-                            print(f"Failed to send reversed trajectory: {e}")
+                            print(f"Reverse send failed: {e}")
                             break
+                else:
+                    near_end_since = None
         else:
             print("Warning: Received empty path from server. Holding position.")
             while True:

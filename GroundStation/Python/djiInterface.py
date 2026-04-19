@@ -358,28 +358,30 @@ class DJIInterface:
         """Navigate to a waypoint with custom PID tuning parameters."""
         return self.requestSend(EP_TUNING, f"{latitude},{longitude},{altitude},{yaw},{kp_pos},{ki_pos},{kd_pos},{kp_yaw},{ki_yaw},{kd_yaw}")
 
-    def requestSendNavigateTrajectory(self, waypoints, finalYaw):
+    def requestSendNavigateTrajectory(self, waypoints, lookaheadDistance=5.5):
         """
-        Navigate through a series of waypoints.
-        :param waypoints: A list of triples (latitude, longitude, altitude) for each waypoint.
-        :param finalYaw: The final yaw angle at the last waypoint.
+        Navigate through a series of waypoints using the Android-side pure-pursuit loop.
+
+        :param waypoints: A list of triples (latitude, longitude, altitude).
+        :param lookaheadDistance: Pure-pursuit lookahead (m). Sent as the 4th CSV field
+            of the last waypoint. The Android handler labels that field "finalYaw" but
+            positionally binds it to DroneController.navigateTrajectory's second argument,
+            which is `lookaheadDistance`. MUST be non-zero — with 0, the loop aims at the
+            drone's own projection on the segment and oscillates perpendicular to the path.
+            5.5 is the loop's intended default; we set it here because the on-device
+            default never fires (the positional bind shadows it).
         :return: The response from the server.
         """
         self.requestSendEnableVirtualStick()
         if not waypoints:
             raise ValueError("No waypoints provided")
 
-        # Build the message
-        # All waypoints except the last: "lat,lon,alt"
-        # Last waypoint: "lat,lon,alt,yaw"
         segments = []
         for i, (lat, lon, alt) in enumerate(waypoints):
             if i < len(waypoints) - 1:
-                # Intermediary waypoint: lat,lon,alt
                 segments.append(f"{lat},{lon},{alt}")
             else:
-                # Last waypoint: lat,lon,alt,yaw
-                segments.append(f"{lat},{lon},{alt},{finalYaw}")
+                segments.append(f"{lat},{lon},{alt},{lookaheadDistance}")
 
         message = ";".join(segments)
         return self.requestSend(EP_GOTO_TRAJECTORY, message)

@@ -23,6 +23,13 @@ router = APIRouter()
 
 TELEMETRY_FANOUT_INTERVAL = 1.0  # seconds
 
+# The only control-loop knob we can actually reach from Python without rebuilding the
+# Android app. It rides the wire in the field the Kotlin parser calls "finalYaw" — but
+# that value is positionally bound to DroneController.navigateTrajectory's lookaheadDistance
+# arg. Must be non-zero: with 0, pure pursuit degenerates to aim-at-own-projection and the
+# drone oscillates perpendicular to the segment.
+DEFAULT_LOOKAHEAD_M = 5.5
+
 # ── Pydantic models ──────────────────────────────────────────────────
 
 class LocationModel(BaseModel):
@@ -118,24 +125,33 @@ def broadcast_swarm_paths(app_state: Any):
             "lng": path_lng,
             "reach": 50
         })
-        
+
     result = compute_paths(pathing_input, stripe_spacing=10, sweep_dir='ew')
     paths = result["paths"]
-    
+
     for drone_id, waypoints in paths.items():
-        if drone_id in swarm_sockets:
-            # Inject fixed altitude
-            fmt_waypoints = [{"lat": pt[0], "lon": pt[1], "alt": 30.0} for pt in waypoints]
-            if not fmt_waypoints:
-                continue # Sometimes drone gets blocked out from grid, skip assigning.
-                
-            reg.add_or_update(drone_id, {"path": fmt_waypoints})
-            
-            asyncio.create_task(swarm_sockets[drone_id].send_json({
-                "action": "path_update",
-                "waypoints": fmt_waypoints,
-                "targetAltitude": 30.0
-            }))
+        if drone_id not in swarm_sockets:
+            continue
+
+        # Don't yank a path out from under a drone that's already flying it — that would
+        # force aegis_client to re-send /send/navigateTrajectory, spawning a second control
+        # loop on the Android side alongside the one already running.
+        existing = reg.get(drone_id) or {}
+        if existing.get("path") and existing.get("mission_active"):
+            continue
+
+        fmt_waypoints = [{"lat": pt[0], "lon": pt[1], "alt": 30.0} for pt in waypoints]
+        if not fmt_waypoints:
+            continue  # Sometimes drone gets blocked out from grid, skip assigning.
+
+        reg.add_or_update(drone_id, {"path": fmt_waypoints})
+
+        asyncio.create_task(swarm_sockets[drone_id].send_json({
+            "action": "path_update",
+            "waypoints": fmt_waypoints,
+            "targetAltitude": 30.0,
+            "lookaheadDistance": DEFAULT_LOOKAHEAD_M,
+        }))
 
 @router.websocket("/ws/swarm/{uuid}")
 async def ws_swarm(uuid: str, ws: WebSocket):
@@ -169,12 +185,17 @@ async def ws_swarm(uuid: str, ws: WebSocket):
                     await ws.send_json({
                         "action": "path_update",
                         "waypoints": waypoints,
-                        "targetAltitude": target_alt
+                        "targetAltitude": target_alt,
+                        "lookaheadDistance": DEFAULT_LOOKAHEAD_M,
                     })
                 else:
                     # Trigger the massive algorithmic swarm allocation
                     broadcast_swarm_paths(ws.app.state)
-                    
+
+            elif action == "mission_state":
+                # Edge client announces takeoff/landing so we don't re-allocate mid-flight.
+                reg.add_or_update(uuid, {"mission_active": bool(data.get("active", False))})
+
             elif action == "telemetry":
                 tel = data.get("data", {})
                 reg.update_telemetry(uuid, tel)
