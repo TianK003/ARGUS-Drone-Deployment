@@ -2,203 +2,294 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>ARGUS Hub — Swarm Dashboard</title>
+<title>ARGUS Hub</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
   :root {
-    --bg: #0e1116;
-    --panel: #161b22;
+    --bg:      #0e1116;
+    --panel:   #161b22;
     --panel-2: #1f252d;
-    --border: #2a313a;
-    --text: #e6edf3;
-    --muted: #8b949e;
-    --accent: #3fb950;
-    --danger: #f85149;
-    --warn: #d29922;
+    --border:  #2a313a;
+    --text:    #e6edf3;
+    --muted:   #8b949e;
+    --accent:  #3fb950;
+    --danger:  #f85149;
+    --warn:    #d29922;
+    --blue:    #58a6ff;
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
-  #app { display: grid; grid-template-columns: 1fr 340px; height: 100vh; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 13px; }
+
+  /* ── Layout: sidebar left (1/3) · map right (2/3) ── */
+  #app { display: grid; grid-template-columns: clamp(280px, 33vw, 400px) 1fr; height: 100vh; overflow: hidden; }
+
+  /* ── Map ── */
   #map { height: 100%; background: #c9ced3; }
   #map .leaflet-tile-pane { filter: grayscale(15%) brightness(0.9); }
-  #map.placement-arm { cursor: crosshair; }
+  #map.placement-arm,
   #map.placement-arm .leaflet-grab { cursor: crosshair; }
-  #side { background: var(--panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
-  header { padding: 14px 16px; border-bottom: 1px solid var(--border); }
-  header h1 { margin: 0; font-size: 14px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
-  header p { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
-  .section { padding: 12px 16px; border-bottom: 1px solid var(--border); }
-  .section h2 { margin: 0 0 8px; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); font-weight: 600; }
-  .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 6px 0; font-size: 13px; }
-  .muted { color: var(--muted); font-size: 12px; }
-  input[type="range"] { width: 100%; }
-  input[type="number"] { width: 80px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px; font-family: inherit; }
-  button { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; font-size: 12px; cursor: pointer; font-family: inherit; }
-  button:hover { border-color: #3a434e; }
-  button.danger { border-color: #5a2b2b; color: var(--danger); }
-  button.danger:hover { background: #2a1818; }
-  button.primary { border-color: #1f4a2a; color: var(--accent); }
-  button.primary:hover { background: #132319; }
-  #drone-list { flex: 1; overflow-y: auto; min-height: 0; }
-  .drone-item { padding: 8px 16px; border-bottom: 1px solid var(--border); cursor: pointer; display: flex; align-items: center; gap: 10px; font-size: 13px; }
-  .drone-item:hover { background: var(--panel-2); }
-  .drone-item.selected { background: #1a2a22; border-left: 3px solid var(--accent); padding-left: 13px; }
-  .swatch { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-  .drone-item .meta { margin-left: auto; color: var(--muted); font-size: 11px; }
-  .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-  .controls.full { grid-template-columns: 1fr; }
-  .hint { font-size: 11px; color: var(--muted); line-height: 1.5; }
-  kbd { background: var(--panel-2); border: 1px solid var(--border); border-radius: 3px; padding: 1px 5px; font-size: 10px; }
-  .leaflet-tooltip.drone-label { background: rgba(20,25,32,0.9); border: 1px solid var(--border); color: var(--text); font-size: 11px; padding: 2px 6px; box-shadow: none; }
-  .leaflet-tooltip.drone-label::before { display: none; }
-  .stat { font-variant-numeric: tabular-nums; }
-  .empty { padding: 16px; text-align: center; color: var(--muted); font-size: 12px; }
-  .stripe-dir { display: flex; gap: 4px; }
-  .stripe-dir button { flex: 1; }
-  .stripe-dir button.active { border-color: var(--accent); color: var(--accent); }
 
-  /* ARGUS additions: brand, mode toggle, live markers, registration dialog. */
-  .brand-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-  .brand-row h1 { letter-spacing: 2px; color: var(--text); }
-  .brand-row .build { color: var(--muted); font-size: 10px; letter-spacing: 0.08em; }
-  .mode-toggle { display: flex; gap: 4px; margin-top: 8px; }
-  .mode-toggle button { flex: 1; }
-  .mode-toggle button.active { border-color: var(--accent); color: var(--accent); }
-  .drone-item .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-  .drone-item .status-dot.online { background: var(--accent); }
-  .drone-item .status-dot.offline { background: var(--danger); }
-  .drone-item .id-col { display: flex; align-items: center; gap: 6px; }
-  .drone-item .meta-col { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-  .drone-item .control-btn { padding: 3px 8px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); text-decoration: none; background: transparent; border: 1px solid var(--accent); border-radius: 3px; white-space: nowrap; }
-  .drone-item .control-btn:hover { background: #132319; color: var(--text); }
-  .drone-item.live-row { cursor: pointer; }
-  .drone-item.live-row:hover { background: var(--panel-2); }
-  a.control-link { color: var(--accent); text-decoration: none; padding: 6px 10px; font-size: 12px; border: 1px solid var(--accent); border-radius: 4px; display: inline-block; }
-  a.control-link:hover { background: #132319; color: var(--text); }
-  .hidden { display: none !important; }
-  .banner-live { margin: 0; padding: 8px 16px; font-size: 11px; color: var(--muted); background: var(--panel-2); border-bottom: 1px solid var(--border); }
-  .banner-live.is-warn { color: var(--warn); }
-  .banner-live.is-err { color: var(--danger); }
-  dialog#add-dialog { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 18px 20px; min-width: 320px; }
-  dialog#add-dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
-  dialog#add-dialog h3 { margin: 0 0 10px; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
-  dialog#add-dialog .field { display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px; font-size: 12px; }
-  dialog#add-dialog label { color: var(--muted); font-size: 11px; }
-  dialog#add-dialog input { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; font-family: inherit; font-size: 13px; }
-  dialog#add-dialog .actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
-  dialog#add-dialog .error { color: var(--danger); font-size: 11px; min-height: 14px; }
+  /* ── Sidebar ── */
+  #side { background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 
-  /* Post-placement preview panel — floats over the map so the live radius is visible. */
-  .place-panel {
-    position: fixed;
-    bottom: 20px;
-    left: calc((100vw - 340px) / 2);
-    transform: translateX(-50%);
-    background: var(--panel);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 12px 14px 10px;
-    min-width: 320px;
-    max-width: 420px;
-    z-index: 2000;
-    box-shadow: 0 6px 24px rgba(0,0,0,0.45);
-    font-size: 13px;
+  /* ── Header ── */
+  #side > header { padding: 14px 16px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .brand-row { display: flex; align-items: baseline; justify-content: space-between; }
+  .brand-row h1 { margin: 0; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; }
+  .brand-row .build { color: var(--muted); font-size: 10px; }
+  .tagline { margin: 3px 0 0; font-size: 11px; color: var(--muted); }
+
+  /* ── Scrollable body ── */
+  #side-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column; min-height: 0; }
+
+  /* ── Sections ── */
+  .section { border-bottom: 1px solid var(--border); flex-shrink: 0; }
+
+  .section-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px; cursor: pointer; user-select: none;
   }
-  .place-panel .title { font-weight: 600; letter-spacing: 0.02em; }
-  .place-panel .coords { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-  .place-panel .row { margin: 8px 0 4px; }
+  .section-head:hover { background: var(--panel-2); }
+  .section-head h2 { margin: 0; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .section-head .chevron { color: var(--muted); font-size: 10px; transition: transform 0.18s; }
+  .section-head.is-collapsed .chevron { transform: rotate(-90deg); }
+
+  .section-body { padding: 0 16px 12px; }
+  .section-body.is-hidden { display: none; }
+
+  /* non-collapsible */
+  .section--static .section-head { cursor: default; pointer-events: none; }
+
+  /* ── Prompt ── */
+  #prompt-textarea {
+    width: 100%; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 5px;
+    padding: 8px 10px; font-family: inherit; font-size: 12px;
+    resize: vertical; min-height: 66px; line-height: 1.5; outline: none;
+  }
+  #prompt-textarea:focus { border-color: var(--blue); }
+  #prompt-textarea::placeholder { color: var(--muted); }
+  #btn-dispatch {
+    width: 100%; margin-top: 7px;
+    background: transparent; color: var(--accent);
+    border: 1px solid var(--accent); border-radius: 4px;
+    padding: 6px 10px; font-size: 12px; cursor: pointer;
+    font-family: inherit; font-weight: 600; letter-spacing: 0.03em;
+  }
+  #btn-dispatch:hover { background: #132319; }
+
+  /* ── Notifications ── */
+  .notif-badge { background: var(--warn); color: #000; border-radius: 999px; font-size: 9px; font-weight: 700; padding: 1px 5px; }
+  .notif-badge:empty { display: none; }
+  .notif-empty { font-size: 11px; color: var(--muted); padding: 4px 0 2px; }
+  .notif-list { list-style: none; margin: 0; padding: 0; max-height: 200px; overflow-y: auto; }
+  .notif-item { padding: 5px 0; border-top: 1px solid var(--border); display: flex; gap: 8px; align-items: baseline; font-size: 11px; }
+  .notif-item:first-child { border-top: none; }
+  .notif-ts { color: var(--muted); flex-shrink: 0; font-family: ui-monospace, monospace; font-size: 10px; }
+  .notif-drone { color: var(--blue); font-weight: 600; flex-shrink: 0; }
+  .notif-text { flex: 1; color: var(--text); }
+  .notif-item.is-warn .notif-text { color: var(--warn); }
+  .notif-item.is-alert .notif-text { color: var(--danger); font-weight: 600; }
+
+  /* ── Register button ── */
+  #btn-register {
+    width: 100%; margin-bottom: 10px;
+    background: transparent; color: var(--accent);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 5px 9px; font-size: 11px; cursor: pointer; font-family: inherit;
+  }
+  #btn-register:hover { border-color: var(--accent); }
+
+  /* ── Drones section body: own scroll ── */
+  #drones-body {
+    padding: 10px 10px 12px;
+    max-height: calc(100vh - 230px);
+    overflow-y: auto;
+  }
+
+  /* ── Camera grid: 2 columns ── */
+  .empty { padding: 4px 0 2px; color: var(--muted); font-size: 11px; }
+  .drone-cameras { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+
+  .cam-tile {
+    background: #0a0c10; border: 1px solid var(--border); border-radius: 5px;
+    overflow: hidden; aspect-ratio: 16/9; position: relative;
+    cursor: pointer;
+  }
+  .cam-tile:hover .cam-expand { opacity: 1; }
+
+  .cam-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+  .cam-label {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    padding: 2px 5px; background: rgba(0,0,0,0.72);
+    font-size: 9px; color: var(--text);
+    display: flex; align-items: center; gap: 4px;
+  }
+  .cam-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cam-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+  .cam-dot.online  { background: var(--accent); }
+  .cam-dot.offline { background: var(--danger); }
+
+  /* Expand icon, top-right, visible on hover */
+  .cam-expand {
+    position: absolute; top: 4px; right: 4px;
+    background: rgba(0,0,0,0.65); color: var(--text);
+    border: none; border-radius: 3px;
+    padding: 1px 4px; font-size: 9px; cursor: pointer;
+    opacity: 0; transition: opacity 0.15s;
+    text-decoration: none; line-height: 1.6;
+  }
+
+  .cam-no-signal {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 9px;
+  }
+
+  /* Delete button on tile (top-left, hover-reveal) */
+  .cam-delete {
+    position: absolute; top: 4px; left: 4px;
+    background: rgba(248,81,73,0.85); color: #fff;
+    border: none; border-radius: 3px;
+    padding: 1px 5px; font-size: 9px; cursor: pointer;
+    opacity: 0; transition: opacity 0.15s; line-height: 1.6;
+    font-family: inherit;
+  }
+  .cam-tile:hover .cam-delete { opacity: 1; }
+
+  /* ── Pathing section ── */
+  .stripe-dir { display: flex; gap: 4px; margin-top: 6px; }
+  .stripe-dir button {
+    flex: 1; background: var(--panel-2); color: var(--muted);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 4px 6px; font-size: 11px; cursor: pointer; font-family: inherit;
+  }
+  .stripe-dir button:hover { border-color: #3a434e; color: var(--text); }
+  .stripe-dir button.active { border-color: var(--accent); color: var(--accent); }
+  .path-row { display: flex; justify-content: space-between; align-items: center; font-size: 11px; margin: 4px 0; }
+  .path-hint { font-size: 10px; color: var(--muted); line-height: 1.5; margin-top: 6px; }
+
+  /* ── Leaflet ── */
+  .leaflet-tooltip.drone-label { background: rgba(14,17,22,0.92); border: 1px solid var(--border); color: var(--text); font-size: 10px; padding: 2px 6px; box-shadow: none; }
+  .leaflet-tooltip.drone-label::before { display: none; }
+
+  /* ── Dialogs ── */
+  .hidden { display: none !important; }
+
+  dialog#add-dialog { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 18px 20px; min-width: 300px; }
+  dialog#add-dialog::backdrop { background: rgba(0,0,0,0.55); }
+  dialog#add-dialog h3 { margin: 0 0 12px; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+  dialog#add-dialog .field { display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px; font-size: 12px; }
+  dialog#add-dialog label { color: var(--muted); font-size: 10px; }
+  dialog#add-dialog input { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; font-family: inherit; font-size: 12px; }
+  dialog#add-dialog .actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+  dialog#add-dialog .error { color: var(--danger); font-size: 10px; min-height: 14px; }
+  dialog button { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px 12px; font-size: 12px; cursor: pointer; font-family: inherit; }
+  dialog button:hover { border-color: #3a434e; }
+  dialog button.primary { border-color: #1f4a2a; color: var(--accent); }
+  dialog button.primary:hover { background: #132319; }
+  .hint { font-size: 10px; color: var(--muted); line-height: 1.5; }
+
+  /* ── Place panel (floats over map) ── */
+  .place-panel {
+    position: fixed; bottom: 20px;
+    left: calc(clamp(280px,33vw,400px) + (100vw - clamp(280px,33vw,400px)) / 2);
+    transform: translateX(-50%);
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px 10px; min-width: 290px; max-width: 380px;
+    z-index: 2000; box-shadow: 0 6px 24px rgba(0,0,0,0.45); font-size: 12px;
+  }
+  .place-panel .row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin: 6px 0; }
+  .place-panel .coords { color: var(--muted); font-size: 10px; }
   .place-panel .actions { display: flex; gap: 6px; margin-top: 10px; }
-  .place-panel .actions button { flex: 1; }
-  .place-panel .err { color: var(--danger); font-size: 11px; min-height: 14px; margin-top: 6px; }
+  .place-panel .actions button { flex: 1; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px; font-size: 11px; cursor: pointer; font-family: inherit; }
+  .place-panel .actions button.primary { border-color: #1f4a2a; color: var(--accent); }
+  .place-panel .actions button:hover { border-color: #3a434e; }
+  .place-panel .actions button.primary:hover { background: #132319; }
+  .place-panel .err { color: var(--danger); font-size: 10px; min-height: 14px; margin-top: 4px; }
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="map"></div>
+
+  <!-- ── Sidebar (1/3) ── -->
   <aside id="side">
     <header>
       <div class="brand-row">
         <h1>ARGUS Hub</h1>
         <span class="build">v0.3</span>
       </div>
-      <p>Multi-drone situational awareness</p>
-      <div class="mode-toggle" role="tablist">
-        <button id="mode-live" class="active" role="tab" aria-selected="true">Live</button>
-        <button id="mode-plan" role="tab" aria-selected="false">Planning</button>
-      </div>
+      <p class="tagline">Multi-drone situational awareness</p>
     </header>
 
-    <div id="live-banner" class="banner-live">Fetching connected drones…</div>
+    <div id="side-body">
 
-    <div class="section" id="help-live">
-      <h2>Live view</h2>
-      <div class="row"><span class="muted">Click drone row</span><span>open control page</span></div>
-      <div class="row"><span class="muted">Click map marker</span><span>pan + reach slider</span></div>
-      <div class="row"><span class="muted">Shift+click row</span><span>pan without opening</span></div>
-      <div class="row"><span class="muted">+ Register</span><span>then click map to place</span></div>
-      <button id="btn-register" class="primary" style="width: 100%; margin-top: 6px;">+ Register drone</button>
-    </div>
-
-    <div class="section hidden" id="help-plan">
-      <h2>Planning</h2>
-      <div class="row"><span class="muted">Click empty map</span><span>add planned point</span></div>
-      <div class="row"><span class="muted">Click drone</span><span>select</span></div>
-      <div class="row"><span class="muted"><kbd>Del</kbd> / <kbd>Backspace</kbd></span><span>remove selected</span></div>
-      <div class="row"><span class="muted">Drag drone</span><span>relocate</span></div>
-      <button id="btn-save-plan" class="primary" style="width: 100%; margin-top: 6px;">Save plan</button>
-    </div>
-
-    <div class="section">
-      <h2>Swarm</h2>
-      <div class="row"><span>Drones</span><span class="stat" id="stat-count">0</span></div>
-      <div class="row"><span>Coverage area</span><span class="stat" id="stat-area">0 km²</span></div>
-      <div class="row"><span>Overlap resolved</span><span class="stat" id="stat-overlap">0 km²</span></div>
-    </div>
-
-    <div class="section">
-      <h2>Pathing</h2>
-      <div class="row"><span>Stripe spacing</span><span class="stat"><span id="stripe-val">40</span> m</span></div>
-      <input type="range" id="stripe-spacing" min="10" max="200" step="5" value="40" />
-      <div class="row" style="margin-top: 10px;"><span>Sweep direction</span></div>
-      <div class="stripe-dir">
-        <button id="dir-ew" class="active">E ↔ W</button>
-        <button id="dir-ns">N ↕ S</button>
+      <!-- Search prompt -->
+      <div class="section section--static">
+        <div class="section-head"><h2>Search Target</h2></div>
+        <div class="section-body">
+          <textarea id="prompt-textarea" rows="3" placeholder="Describe what the swarm should search for…"></textarea>
+          <button id="btn-dispatch">Dispatch to swarm</button>
+        </div>
       </div>
-      <div class="hint" style="margin-top: 10px;">Boustrophedon lawnmower. Overlapping sectors go to the drone closest to each point.</div>
-    </div>
 
-    <div class="section" id="selected-panel" style="display: none;">
-      <h2>Selected drone — <span id="sel-id">—</span></h2>
-      <div class="row"><span>Reach</span><span class="stat"><span id="reach-val">—</span> m</span></div>
-      <input type="range" id="reach-slider" min="100" max="10000" step="50" value="800" />
-      <div class="row" style="margin-top: 8px;">
-        <span class="muted">Lat, Lng</span>
-        <span class="stat muted" id="sel-coords" style="font-size: 11px;">—</span>
+      <!-- Notifications (collapsible, collapsed by default) -->
+      <div class="section">
+        <div class="section-head is-collapsed" id="notif-toggle">
+          <h2>Detections <span class="notif-badge" id="notif-badge"></span></h2>
+          <span class="chevron">▾</span>
+        </div>
+        <div class="section-body is-hidden" id="notif-body">
+          <p class="notif-empty" id="notif-empty">No detections yet.</p>
+          <ol class="notif-list" id="notif-list"></ol>
+        </div>
       </div>
-      <div id="sel-control-row" style="margin-top: 10px; display: none;">
-        <a id="sel-control-link" class="control-link" href="#" style="display: block; text-align: center;">Control this drone ↗</a>
-      </div>
-      <div class="controls" style="margin-top: 10px;">
-        <button id="btn-center">Center map</button>
-        <button id="btn-delete" class="danger">Delete</button>
-      </div>
-    </div>
 
-    <div class="section" style="flex: 0 0 auto;">
-      <h2>Drones</h2>
-    </div>
-    <div id="drone-list"></div>
-
-    <div class="section hidden" id="plan-actions" style="flex: 0 0 auto;">
-      <div class="controls">
-        <button id="btn-clear" class="danger">Clear all</button>
-        <button id="btn-demo" class="primary">Load demo</button>
+      <!-- Pathing controls (collapsible, collapsed by default) -->
+      <div class="section">
+        <div class="section-head is-collapsed" id="pathing-toggle">
+          <h2>Pathing</h2>
+          <span class="chevron">▾</span>
+        </div>
+        <div class="section-body is-hidden" id="pathing-body">
+          <div class="path-row">
+            <span>Stripe spacing</span>
+            <span><span id="stripe-val">40</span> m</span>
+          </div>
+          <input type="range" id="stripe-spacing" min="10" max="200" step="5" value="40">
+          <div class="path-row" style="margin-top:8px;"><span>Sweep direction</span></div>
+          <div class="stripe-dir">
+            <button id="dir-ew" class="active">E ↔ W</button>
+            <button id="dir-ns">N ↕ S</button>
+          </div>
+          <p class="path-hint">Boustrophedon lawnmower. Overlapping sectors assigned by proximity.</p>
+        </div>
       </div>
+
+      <!-- Drones (collapsible, expanded by default) -->
+      <div class="section">
+        <div class="section-head" id="drones-toggle">
+          <h2>Drones <span id="drone-count" style="color:var(--text);font-weight:700;">0</span></h2>
+          <span class="chevron">▾</span>
+        </div>
+        <div id="drones-body">
+          <button id="btn-register">+ Register drone</button>
+          <div id="drone-cameras" class="drone-cameras"></div>
+          <div id="drone-empty" class="empty hidden">No drones registered.</div>
+        </div>
+      </div>
+
     </div>
   </aside>
+
+  <!-- ── Map (2/3) ── -->
+  <div id="map"></div>
 </div>
 
+<!-- ── Register drone dialog ── -->
 <dialog id="add-dialog">
   <h3>Register drone</h3>
   <div class="field">
@@ -209,15 +300,15 @@
     <label for="reg-label">Label (optional)</label>
     <input id="reg-label" type="text" autocomplete="off" maxlength="60">
   </div>
-  <div class="field" style="flex-direction: row; align-items: center; gap: 8px;">
+  <div class="field" style="flex-direction:row;align-items:center;gap:8px;">
     <input id="reg-mock" type="checkbox">
-    <label for="reg-mock" style="margin: 0;">Mock drone (no real RC; for testing)</label>
+    <label for="reg-mock" style="margin:0;">Mock drone (no real RC)</label>
   </div>
   <div class="field">
     <label for="reg-ip">RC IP address (not needed for mock)</label>
     <input id="reg-ip" type="text" autocomplete="off" placeholder="192.168.1.100">
   </div>
-  <p class="hint" style="margin: 0 0 8px;">After clicking <b>Pick location</b> the dialog closes. Click a point on the map to place this drone, then drag the slider to set its coverage radius and confirm.</p>
+  <p class="hint" style="margin:0 0 6px;">After clicking <b>Pick location</b>, click the map to place this drone.</p>
   <div class="error" id="reg-error"></div>
   <div class="actions">
     <button id="reg-cancel">Cancel</button>
@@ -225,16 +316,14 @@
   </div>
 </dialog>
 
+<!-- ── Placement preview panel ── -->
 <div id="place-panel" class="place-panel hidden">
-  <div class="row" style="display: flex; justify-content: space-between; align-items: baseline; gap: 8px;">
-    <span class="title" id="place-id">—</span>
+  <div class="row">
+    <span style="font-weight:600;" id="place-id">—</span>
     <span class="coords" id="place-coords">—</span>
   </div>
-  <div class="row" style="display: flex; justify-content: space-between;">
-    <span>Coverage radius</span>
-    <span class="stat"><span id="place-reach-val">800</span> m</span>
-  </div>
-  <input type="range" id="place-reach" min="100" max="10000" step="50" value="800" style="width: 100%;">
+  <div class="row"><span>Coverage radius</span><span><span id="place-reach-val">800</span> m</span></div>
+  <input type="range" id="place-reach" min="100" max="10000" step="50" value="800">
   <div class="actions">
     <button id="place-cancel">Cancel</button>
     <button id="place-confirm" class="primary">Register drone</button>
@@ -244,1107 +333,499 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
+'use strict';
+
 const DEFAULT_CENTER = [46.0569, 14.5058];
 const PALETTE = ['#3fb950','#58a6ff','#f778ba','#d29922','#a371f7','#ff7b72','#39c5cf','#e3b341','#bc8cff','#56d364'];
 
-let drones = [];
-let nextId = 1;
-let selectedId = null;
-let stripeSpacing = 40;
-let sweepDir = 'ew';
-
-const R_EARTH = 6378137;
-const pathCache = new Map();
-
-class MinHeap {
-  constructor() {
-    this.data = [];
-  }
-
-  push(item) {
-    this.data.push(item);
-    this.bubbleUp(this.data.length - 1);
-  }
-
-  pop() {
-    if (this.data.length === 0) return null;
-    const top = this.data[0];
-    const end = this.data.pop();
-    if (this.data.length > 0) {
-      this.data[0] = end;
-      this.sinkDown(0);
-    }
-    return top;
-  }
-
-  get size() {
-    return this.data.length;
-  }
-
-  bubbleUp(n) {
-    const item = this.data[n];
-    while (n > 0) {
-      const p = Math.floor((n - 1) / 2);
-      const parent = this.data[p];
-      if (item.f >= parent.f) break;
-      this.data[p] = item;
-      this.data[n] = parent;
-      n = p;
-    }
-  }
-
-  sinkDown(n) {
-    const length = this.data.length;
-    const item = this.data[n];
-
-    while (true) {
-      let left = 2 * n + 1;
-      let right = 2 * n + 2;
-      let swap = null;
-
-      if (left < length) {
-        if (this.data[left].f < item.f) swap = left;
-      }
-
-      if (right < length) {
-        if (
-          (swap === null && this.data[right].f < item.f) ||
-          (swap !== null && this.data[right].f < this.data[left].f)
-        ) {
-          swap = right;
-        }
-      }
-
-      if (swap === null) break;
-      this.data[n] = this.data[swap];
-      this.data[swap] = item;
-      n = swap;
-    }
-  }
-}
-
+// ── Map ───────────────────────────────────────────────────────────────────
 const map = L.map('map', { zoomControl: true, preferCanvas: true }).setView(DEFAULT_CENTER, 14);
-
 map.createPane('coveragePane');
 map.getPane('coveragePane').style.zIndex = 350;
-
 map.createPane('pathPane');
 map.getPane('pathPane').style.zIndex = 450;
 
 L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-  attribution: '© OpenStreetMap © CARTO',
-  maxZoom: 19
+  attribution: '© OpenStreetMap © CARTO', maxZoom: 19
 }).addTo(map);
 
 const pathLayer = L.layerGroup().addTo(map);
 
 map.on('click', (e) => {
   if (e.originalEvent.target.closest('.leaflet-marker-icon')) return;
-  if (typeof window.__argusPlaceClick === 'function' && window.__argusPlaceClick(e.latlng)) {
-    // Placement mode consumed this click.
-    return;
-  }
-  if (window.ARGUS_MODE === 'plan') {
-    addDrone(e.latlng.lat, e.latlng.lng);
-  }
-  // Live mode: clicking empty map does nothing. Use the "+ Register drone" button.
+  if (typeof window.__argusPlaceClick === 'function') window.__argusPlaceClick(e.latlng);
 });
 
-function addDrone(lat, lng, reach = 800) {
-  const id = nextId++;
-  const color = PALETTE[(id - 1) % PALETTE.length];
+// ── Drone state ───────────────────────────────────────────────────────────
+// liveByBackendId: backendId → { marker, circle, sourceId, label, online, color, lat, lng, reach }
+const liveByBackendId = new Map();
 
-  const marker = L.circleMarker([lat, lng], {
-    radius: 8,
-    color: '#fff',
-    weight: 2,
-    fillColor: color,
-    fillOpacity: 1
-  }).addTo(map);
+// ── Path planning ─────────────────────────────────────────────────────────
+let stripeSpacing = 40;
+let sweepDir = 'ew';
+const R_EARTH = 6378137;
+const pathCache = new Map();
 
-  marker.bindTooltip(`D${id}`, {
-    permanent: true,
-    direction: 'top',
-    offset: [0, -6],
-    className: 'drone-label'
-  });
-
-  const circle = L.circle([lat, lng], {
-    pane: 'coveragePane',
-    interactive: false,
-    radius: reach,
-    color: color,
-    weight: 1,
-    opacity: 0.9,
-    dashArray: '6 6',
-    fillColor: color,
-    fillOpacity: 0.06
-  }).addTo(map);
-
-  const drone = { id, lat, lng, reach, color, marker, circle };
-  drones.push(drone);
-
-  marker.on('click', (e) => {
-    L.DomEvent.stopPropagation(e);
-    selectDrone(id);
-  });
-
-  makeDraggable(drone);
-  selectDrone(id);
-  refresh();
-}
-
-function makeDraggable(drone) {
-  let dragging = false;
-
-  drone.marker.on('mousedown', (ev) => {
-    L.DomEvent.stopPropagation(ev);
-    dragging = true;
-    map.dragging.disable();
-
-    const onMove = (mev) => {
-      if (!dragging) return;
-      const ll = mev.latlng;
-      drone.lat = ll.lat;
-      drone.lng = ll.lng;
-      drone.marker.setLatLng(ll);
-      drone.circle.setLatLng(ll);
-      if (drone.id === selectedId) updateSelectedPanel();
-      schedulePathUpdate();
-    };
-
-    const onUp = () => {
-      dragging = false;
-      map.dragging.enable();
-      map.off('mousemove', onMove);
-      map.off('mouseup', onUp);
-      refresh();
-    };
-
-    map.on('mousemove', onMove);
-    map.on('mouseup', onUp);
-  });
-}
-
-function deleteDrone(id, suppressRefresh = false) {
-  const idx = drones.findIndex(d => d.id === id);
-  if (idx < 0) return;
-  const d = drones[idx];
-  map.removeLayer(d.marker);
-  map.removeLayer(d.circle);
-  drones.splice(idx, 1);
-  if (selectedId === id) selectedId = null;
-  if (!suppressRefresh) refresh();
-}
-
-function clearAllDrones() {
-  for (const d of [...drones]) deleteDrone(d.id, true);
-  refresh();
-}
-
-function selectDrone(id) {
-  selectedId = id;
-  drones.forEach(d => {
-    const sel = d.id === id;
-    d.marker.setStyle({ weight: sel ? 4 : 2, radius: sel ? 10 : 8 });
-    d.circle.setStyle({
-      weight: sel ? 2 : 1,
-      opacity: sel ? 1 : 0.85,
-      dashArray: '6 6',
-      fillOpacity: sel ? 0.10 : 0.06
-    });
-  });
-  updateSelectedPanel();
-  renderList();
+class MinHeap {
+  constructor() { this.data = []; }
+  push(item) { this.data.push(item); this._up(this.data.length - 1); }
+  pop() {
+    if (!this.data.length) return null;
+    const top = this.data[0], end = this.data.pop();
+    if (this.data.length) { this.data[0] = end; this._down(0); }
+    return top;
+  }
+  get size() { return this.data.length; }
+  _up(n) {
+    const item = this.data[n];
+    while (n > 0) {
+      const p = Math.floor((n - 1) / 2), par = this.data[p];
+      if (item.f >= par.f) break;
+      this.data[p] = item; this.data[n] = par; n = p;
+    }
+  }
+  _down(n) {
+    const len = this.data.length, item = this.data[n];
+    while (true) {
+      let l = 2*n+1, r = 2*n+2, s = null;
+      if (l < len && this.data[l].f < item.f) s = l;
+      if (r < len && ((s === null && this.data[r].f < item.f) || (s !== null && this.data[r].f < this.data[l].f))) s = r;
+      if (s === null) break;
+      this.data[n] = this.data[s]; this.data[s] = item; n = s;
+    }
+  }
 }
 
 function toLocal(lat, lng, origin) {
-  const dLat = (lat - origin.lat) * Math.PI / 180;
-  const dLng = (lng - origin.lng) * Math.PI / 180;
-  const x = dLng * R_EARTH * Math.cos(origin.lat * Math.PI / 180);
-  const y = dLat * R_EARTH;
-  return { x, y };
+  return { x: (lng-origin.lng)*Math.PI/180*R_EARTH*Math.cos(origin.lat*Math.PI/180), y: (lat-origin.lat)*Math.PI/180*R_EARTH };
+}
+function toLatLng(x, y, origin) {
+  return [origin.lat+(y/R_EARTH)*180/Math.PI, origin.lng+(x/(R_EARTH*Math.cos(origin.lat*Math.PI/180)))*180/Math.PI];
+}
+function cellKey(x, y) { return x+':'+y; }
+function isInside(g, x, y) { return x>=0&&y>=0&&x<g.width&&y<g.height; }
+function nb4(c) { return [{x:c.x+1,y:c.y},{x:c.x-1,y:c.y},{x:c.x,y:c.y+1},{x:c.x,y:c.y-1}]; }
+function nb8(c) { return [{x:c.x+1,y:c.y},{x:c.x-1,y:c.y},{x:c.x,y:c.y+1},{x:c.x,y:c.y-1},{x:c.x+1,y:c.y+1},{x:c.x+1,y:c.y-1},{x:c.x-1,y:c.y+1},{x:c.x-1,y:c.y-1}]; }
+
+function touchesForeign(g, id, c) {
+  for (const n of nb8(c)) { if (!isInside(g,n.x,n.y)||g.owner[n.y][n.x]!==id) return true; } return false;
 }
 
-function toLatLng(x, y, origin) {
-  const lat = origin.lat + (y / R_EARTH) * 180 / Math.PI;
-  const lng = origin.lng + (x / (R_EARTH * Math.cos(origin.lat * Math.PI / 180))) * 180 / Math.PI;
-  return [lat, lng];
+function seamCost(g, id, c) {
+  let owned=0, foreign=0, empty=0;
+  for (const n of nb8(c)) {
+    if (!isInside(g,n.x,n.y)){empty++;continue;}
+    const o=g.owner[n.y][n.x]; if(o===id)owned++;else if(o===null)empty++;else foreign++;
+  }
+  return Math.max(1, (owned<8?2:28)+owned*2-foreign*2-empty);
+}
+
+function manhattan(a,b){return Math.abs(a.x-b.x)+Math.abs(a.y-b.y);}
+
+function seamPath(g, id, start, goal) {
+  const sk=cellKey(start.x,start.y), gk=cellKey(goal.x,goal.y);
+  const heap=new MinHeap(), prev=new Map(), gs=new Map(), closed=new Set();
+  gs.set(sk,0); heap.push({x:start.x,y:start.y,key:sk,f:manhattan(start,goal)});
+  while(heap.size>0){
+    const cur=heap.pop(); if(!cur)break; if(closed.has(cur.key))continue; closed.add(cur.key);
+    if(cur.key===gk){const out=[];let c={x:cur.x,y:cur.y};while(c){out.push(c);c=prev.get(cellKey(c.x,c.y))||null;}return out.reverse();}
+    for(const n of nb4(cur)){
+      if(!isInside(g,n.x,n.y)||g.owner[n.y][n.x]!==id)continue;
+      const nk=cellKey(n.x,n.y); if(closed.has(nk))continue;
+      const t=(gs.get(cur.key)??Infinity)+seamCost(g,id,n);
+      if(t<(gs.get(nk)??Infinity)){prev.set(nk,{x:cur.x,y:cur.y});gs.set(nk,t);heap.push({x:n.x,y:n.y,key:nk,f:t+manhattan(n,goal)});}
+    }
+  }
+  return null;
+}
+
+function shortestPath(g, id, start, goal) {
+  const ck=id+'|'+cellKey(start.x,start.y)+'|'+cellKey(goal.x,goal.y);
+  if(pathCache.has(ck))return pathCache.get(ck);
+  const rk=id+'|'+cellKey(goal.x,goal.y)+'|'+cellKey(start.x,start.y);
+  if(pathCache.has(rk)){const r=pathCache.get(rk);const out=r?r.slice().reverse():null;pathCache.set(ck,out);return out;}
+  const p=seamPath(g,id,start,goal); pathCache.set(ck,p); return p;
+}
+
+function straightPath(g,id,start,goal){
+  if(start.x===goal.x){const d=goal.y>start.y?1:-1,path=[{x:start.x,y:start.y}];for(let y=start.y+d;y!==goal.y+d;y+=d){if(!isInside(g,start.x,y)||g.owner[y][start.x]!==id)return null;path.push({x:start.x,y});}return path;}
+  if(start.y===goal.y){const d=goal.x>start.x?1:-1,path=[{x:start.x,y:start.y}];for(let x=start.x+d;x!==goal.x+d;x+=d){if(!isInside(g,x,start.y)||g.owner[start.y][x]!==id)return null;path.push({x,y:start.y});}return path;}
+  return null;
+}
+
+function cellCenter(g,c){return{x:g.xMin+(c.x+0.5)*g.cell,y:g.yMin+(c.y+0.5)*g.cell,cell:{x:c.x,y:c.y}};}
+
+function simplify(pts){
+  if(pts.length<=2)return pts.slice();
+  const out=[pts[0]];
+  for(let i=1;i<pts.length-1;i++){const a=out[out.length-1],b=pts[i],c=pts[i+1];if(Math.abs((b.x-a.x)*(c.y-b.y)-(b.y-a.y)*(c.x-b.x))>=1e-9)out.push(b);}
+  out.push(pts[pts.length-1]); return out;
+}
+
+function contiguousRuns(xs){
+  if(!xs.length)return[];const runs=[];let s=xs[0],p=xs[0];
+  for(let i=1;i<xs.length;i++){if(xs[i]===p+1){p=xs[i];continue;}runs.push({start:s,end:p});s=xs[i];p=xs[i];}
+  runs.push({start:s,end:p});return runs;
+}
+
+function findComponents(g,id){
+  const vis=Array.from({length:g.height},()=>Array(g.width).fill(false)),comps=[],dirs=[[1,0],[-1,0],[0,1],[0,-1]];
+  for(let y=0;y<g.height;y++)for(let x=0;x<g.width;x++){
+    if(vis[y][x]||g.owner[y][x]!==id)continue;
+    const q=[{x,y}],comp=[];vis[y][x]=true;
+    while(q.length){const cur=q.shift();comp.push(cur);for(const[dx,dy]of dirs){const nx=cur.x+dx,ny=cur.y+dy;if(!isInside(g,nx,ny)||vis[ny][nx]||g.owner[ny][nx]!==id)continue;vis[ny][nx]=true;q.push({x:nx,y:ny});}}
+    comps.push(comp);
+  }
+  return comps;
+}
+
+function sweepRoute(g, id, comp) {
+  const set=new Set(comp.map(c=>cellKey(c.x,c.y))),rows=new Map();
+  for(const c of comp){if(!rows.has(c.y))rows.set(c.y,[]);rows.get(c.y).push(c.x);}
+  const ys=Array.from(rows.keys()).sort((a,b)=>a-b),route=[];
+  for(let i=0;i<ys.length;i++){
+    const y=ys[i],xs=rows.get(y).sort((a,b)=>a-b),runs=contiguousRuns(xs);
+    if(i%2===1)runs.reverse();
+    for(const run of runs){
+      const seq=[];
+      if(i%2===0){for(let x=run.start;x<=run.end;x++)if(set.has(cellKey(x,y)))seq.push({x,y});}
+      else{for(let x=run.end;x>=run.start;x--)if(set.has(cellKey(x,y)))seq.push({x,y});}
+      if(!seq.length)continue;
+      const pts=seq.map(c=>cellCenter(g,c));
+      if(!route.length){route.push(...pts);continue;}
+      const from=route[route.length-1].cell,to=seq[0];
+      let conn=straightPath(g,id,from,to);
+      if(!conn)conn=shortestPath(g,id,from,to);
+      if(conn&&conn.length>1)route.push(...conn.slice(1).map(c=>cellCenter(g,c)));
+      route.push(...pts);
+    }
+  }
+  return simplify(route);
+}
+
+function boundarySamples(g,id,info,useEnd){
+  const route=info.route,boundary=info.boundary;
+  if(!route.length||!boundary.length)return[];
+  const anchor=useEnd?route[route.length-1].cell:route[0].cell;
+  const sorted=boundary.map(c=>({c,s:manhattan(c,anchor)+seamCost(g,id,c)})).sort((a,b)=>a.s-b.s).slice(0,6).map(x=>x.c);
+  return[...sorted.map(c=>({cell:c,rev:false})),...sorted.map(c=>({cell:c,rev:true}))];
+}
+
+function buildRoute(g, id) {
+  const comps=findComponents(g,id);
+  if(!comps.length)return[];
+  const infos=comps.map(comp=>({route:sweepRoute(g,id,comp),boundary:comp.filter(c=>touchesForeign(g,id,c))})).filter(i=>i.route.length>0);
+  if(!infos.length)return[];
+  let merged=infos.shift();
+  while(infos.length){
+    let best=null;
+    for(let i=0;i<infos.length;i++){
+      const cand=infos[i];
+      for(const a of boundarySamples(g,id,merged,true))for(const b of boundarySamples(g,id,cand,false)){
+        const sc=a.rev?merged.route[0].cell:merged.route[merged.route.length-1].cell;
+        const gc=b.rev?cand.route[cand.route.length-1].cell:cand.route[0].cell;
+        const cp=shortestPath(g,id,sc,gc); if(!cp||cp.length<2)continue;
+        let cost=0;for(let k=1;k<cp.length;k++)cost+=seamCost(g,id,cp[k]);
+        if(!best||cost<best.cost)best={i,ar:a.rev,br:b.rev,cost};
+      }
+    }
+    if(!best){const fb=infos.shift();merged.route=simplify(merged.route.concat(fb.route));merged.boundary=merged.boundary.concat(fb.boundary);continue;}
+    const next=infos.splice(best.i,1)[0];
+    if(best.ar)merged.route.reverse(); if(best.br)next.route.reverse();
+    const sc=merged.route[merged.route.length-1].cell,gc=next.route[0].cell;
+    let conn=straightPath(g,id,sc,gc);if(!conn)conn=shortestPath(g,id,sc,gc);
+    if(conn&&conn.length>1){const pts=conn.slice(1).map(c=>cellCenter(g,c));merged.route=simplify(merged.route.concat(pts).concat(next.route.slice(1)));}
+    else merged.route=simplify(merged.route.concat(next.route));
+    merged.boundary=merged.boundary.concat(next.boundary);
+  }
+  return merged.route.map(p=>({x:p.x,y:p.y}));
+}
+
+function buildGrid(dronesLocal, spacing) {
+  let xMin=Infinity,yMin=Infinity,xMax=-Infinity,yMax=-Infinity;
+  for(const d of dronesLocal){xMin=Math.min(xMin,d.x-d.r);yMin=Math.min(yMin,d.y-d.r);xMax=Math.max(xMax,d.x+d.r);yMax=Math.max(yMax,d.y+d.r);}
+  const cell=Math.max(20,Math.round(spacing*0.75));
+  xMin-=cell;yMin-=cell;xMax+=cell;yMax+=cell;
+  const width=Math.ceil((xMax-xMin)/cell),height=Math.ceil((yMax-yMin)/cell);
+  const owner=Array.from({length:height},()=>Array(width).fill(null));
+  let owned=0;
+  for(let gy=0;gy<height;gy++){const y=yMin+(gy+0.5)*cell;for(let gx=0;gx<width;gx++){const x=xMin+(gx+0.5)*cell;let best=null;for(const d of dronesLocal){const dx=x-d.x,dy=y-d.y,d2=dx*dx+dy*dy;if(d2>d.r*d.r)continue;if(!best||d2<best.d2||(d2===best.d2&&d.r<best.r)||(d2===best.d2&&d.r===best.r&&d.id<best.id))best={id:d.id,d2,r:d.r};}owner[gy][gx]=best?best.id:null;if(best)owned++;}}
+  pathCache.clear();
+  return{owner,xMin,yMin,cell,width,height,coverageArea:owned*cell*cell};
 }
 
 function computePaths() {
-  if (drones.length === 0) return { paths: {}, coverage: 0, overlap: 0 };
-
-  const origin = { lat: drones[0].lat, lng: drones[0].lng };
-  const local = drones.map(d => {
-    const p = toLocal(d.lat, d.lng, origin);
-    return { id: d.id, x: p.x, y: p.y, r: d.reach };
-  });
-
-  const rotated = sweepDir === 'ns'
-    ? local.map(d => ({ id: d.id, x: d.y, y: d.x, r: d.r }))
-    : local.map(d => ({ ...d }));
-
-  const grid = buildExclusiveGrid(rotated, stripeSpacing);
-  const paths = {};
-
-  for (const drone of rotated) {
-    const route = buildDroneRouteFromGrid(grid, drone.id);
-    paths[drone.id] = route.map(pt => {
-      const unrot = sweepDir === 'ns' ? { x: pt.y, y: pt.x } : pt;
-      return toLatLng(unrot.x, unrot.y, origin);
-    });
-  }
-
-  return { paths, coverage: grid.coverageArea, overlap: 0 };
+  const drones=Array.from(liveByBackendId.values());
+  if(!drones.length)return{paths:{},coverage:0};
+  const origin={lat:drones[0].lat,lng:drones[0].lng};
+  const local=drones.map(d=>{const p=toLocal(d.lat,d.lng,origin);return{id:d.sourceId,x:p.x,y:p.y,r:d.reach};});
+  const rotated=sweepDir==='ns'?local.map(d=>({id:d.id,x:d.y,y:d.x,r:d.r})):local.map(d=>({...d}));
+  const g=buildGrid(rotated,stripeSpacing);
+  const paths={};
+  for(const drone of rotated){const route=buildRoute(g,drone.id);paths[drone.id]=route.map(pt=>{const u=sweepDir==='ns'?{x:pt.y,y:pt.x}:pt;return toLatLng(u.x,u.y,origin);});}
+  return{paths,coverage:g.coverageArea};
 }
 
-function buildExclusiveGrid(dronesLocal, spacing) {
-  let xMin = Infinity;
-  let yMin = Infinity;
-  let xMax = -Infinity;
-  let yMax = -Infinity;
+let pathUpdateHandle=null;
+function schedulePathUpdate(){if(pathUpdateHandle)return;pathUpdateHandle=requestAnimationFrame(()=>{pathUpdateHandle=null;drawPaths();});}
 
-  for (const d of dronesLocal) {
-    xMin = Math.min(xMin, d.x - d.r);
-    yMin = Math.min(yMin, d.y - d.r);
-    xMax = Math.max(xMax, d.x + d.r);
-    yMax = Math.max(yMax, d.y + d.r);
-  }
+function fmtArea(m2){if(m2>1e6)return(m2/1e6).toFixed(2)+' km²';if(m2>1e4)return(m2/1e4).toFixed(2)+' ha';return Math.round(m2)+' m²';}
 
-  const cell = Math.max(20, Math.round(spacing * 0.75));
-  xMin -= cell;
-  yMin -= cell;
-  xMax += cell;
-  yMax += cell;
-
-  const width = Math.ceil((xMax - xMin) / cell);
-  const height = Math.ceil((yMax - yMin) / cell);
-
-  const owner = Array.from({ length: height }, () => Array(width).fill(null));
-  let ownedCount = 0;
-
-  for (let gy = 0; gy < height; gy++) {
-    const y = yMin + (gy + 0.5) * cell;
-    for (let gx = 0; gx < width; gx++) {
-      const x = xMin + (gx + 0.5) * cell;
-      const ownerId = getExclusiveOwner(x, y, dronesLocal);
-      owner[gy][gx] = ownerId;
-      if (ownerId !== null) ownedCount++;
-    }
-  }
-
-  pathCache.clear();
-
-  return {
-    owner,
-    xMin,
-    yMin,
-    cell,
-    width,
-    height,
-    coverageArea: ownedCount * cell * cell
-  };
-}
-
-function getExclusiveOwner(x, y, dronesLocal) {
-  let best = null;
-
-  for (const d of dronesLocal) {
-    const dx = x - d.x;
-    const dy = y - d.y;
-    const dist2 = dx * dx + dy * dy;
-    if (dist2 > d.r * d.r) continue;
-
-    if (
-      !best ||
-      dist2 < best.dist2 ||
-      (dist2 === best.dist2 && d.r < best.r) ||
-      (dist2 === best.dist2 && d.r === best.r && d.id < best.id)
-    ) {
-      best = { id: d.id, dist2, r: d.r };
-    }
-  }
-
-  return best ? best.id : null;
-}
-
-function buildDroneRouteFromGrid(grid, droneId) {
-  const components = findComponents(grid, droneId);
-  if (components.length === 0) return [];
-
-  const routeInfos = components.map(component => {
-    const route = componentSweepRoute(grid, droneId, component);
-    const boundary = componentBoundaryCells(grid, droneId, component);
-    return { component, route, boundary };
-  }).filter(info => info.route.length > 0);
-
-  if (routeInfos.length === 0) return [];
-
-  let mergedInfo = routeInfos.shift();
-
-  while (routeInfos.length) {
-    let best = null;
-
-    for (let i = 0; i < routeInfos.length; i++) {
-      const candidate = routeInfos[i];
-      const mergedCandidates = candidateBoundarySamples(grid, droneId, mergedInfo, true);
-      const otherCandidates = candidateBoundarySamples(grid, droneId, candidate, false);
-
-      for (const a of mergedCandidates) {
-        for (const b of otherCandidates) {
-          const startCell = a.reverseRoute ? mergedInfo.route[0].cell : mergedInfo.route[mergedInfo.route.length - 1].cell;
-          const endCell = b.reverseRoute ? candidate.route[candidate.route.length - 1].cell : candidate.route[0].cell;
-          const cellPath = shortestOwnedCellPath(grid, droneId, startCell, endCell);
-          if (!cellPath || cellPath.length < 2) continue;
-
-          const cost = weightedCellPathCost(grid, droneId, cellPath);
-          if (!best || cost < best.cost) {
-            best = {
-              routeIndex: i,
-              mergedReverse: a.reverseRoute,
-              candidateReverse: b.reverseRoute,
-              cost
-            };
-          }
-        }
-      }
-    }
-
-    if (!best) {
-      const fallback = routeInfos.shift();
-      mergedInfo.route = simplifyPoints(mergedInfo.route.concat(fallback.route));
-      mergedInfo.boundary = mergedInfo.boundary.concat(fallback.boundary);
-      continue;
-    }
-
-    const nextInfo = routeInfos.splice(best.routeIndex, 1)[0];
-
-    if (best.mergedReverse) mergedInfo.route.reverse();
-    if (best.candidateReverse) nextInfo.route.reverse();
-
-    const startCell = mergedInfo.route[mergedInfo.route.length - 1].cell;
-    const goalCell = nextInfo.route[0].cell;
-
-    let connector = cheapOwnedConnector(grid, droneId, startCell, goalCell);
-    if (!connector) connector = shortestOwnedCellPath(grid, droneId, startCell, goalCell);
-
-    if (connector && connector.length > 1) {
-      const connectorPts = connector.slice(1).map(cell => cellCenterPoint(grid, cell));
-      mergedInfo.route = simplifyPoints(
-        mergedInfo.route.concat(connectorPts).concat(nextInfo.route.slice(1))
-      );
-    } else {
-      mergedInfo.route = simplifyPoints(mergedInfo.route.concat(nextInfo.route));
-    }
-
-    mergedInfo.boundary = mergedInfo.boundary.concat(nextInfo.boundary);
-  }
-
-  return mergedInfo.route.map(p => ({ x: p.x, y: p.y }));
-}
-
-function candidateBoundarySamples(grid, droneId, info, useEndOfRoute) {
-  const route = info.route;
-  const boundary = info.boundary;
-
-  if (route.length === 0 || boundary.length === 0) return [];
-
-  const anchor = useEndOfRoute ? route[route.length - 1].cell : route[0].cell;
-
-  const sorted = boundary
-    .map(cell => ({
-      cell,
-      score: manhattan(cell, anchor) + seamBiasCost(grid, droneId, cell)
-    }))
-    .sort((a, b) => a.score - b.score)
-    .slice(0, 6)
-    .map(x => x.cell);
-
-  const out = [];
-
-  for (const cell of sorted) {
-    out.push({ cell, reverseRoute: false });
-  }
-
-  for (const cell of sorted) {
-    out.push({ cell, reverseRoute: true });
-  }
-
-  return out;
-}
-
-function manhattan(a, b) {
-  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
-}
-
-function findComponents(grid, droneId) {
-  const visited = Array.from({ length: grid.height }, () => Array(grid.width).fill(false));
-  const components = [];
-  const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
-
-  for (let y = 0; y < grid.height; y++) {
-    for (let x = 0; x < grid.width; x++) {
-      if (visited[y][x]) continue;
-      if (grid.owner[y][x] !== droneId) continue;
-
-      const q = [{ x, y }];
-      const comp = [];
-      visited[y][x] = true;
-
-      while (q.length) {
-        const cur = q.shift();
-        comp.push(cur);
-
-        for (const [dx, dy] of dirs) {
-          const nx = cur.x + dx;
-          const ny = cur.y + dy;
-          if (nx < 0 || ny < 0 || nx >= grid.width || ny >= grid.height) continue;
-          if (visited[ny][nx]) continue;
-          if (grid.owner[ny][nx] !== droneId) continue;
-          visited[ny][nx] = true;
-          q.push({ x: nx, y: ny });
-        }
-      }
-
-      components.push(comp);
-    }
-  }
-
-  return components;
-}
-
-function componentBoundaryCells(grid, droneId, component) {
-  return component.filter(cell => touchesForeignOrEmpty(grid, droneId, cell));
-}
-
-function componentSweepRoute(grid, droneId, component) {
-  const set = new Set(component.map(c => cellKey(c.x, c.y)));
-  const rows = new Map();
-
-  for (const c of component) {
-    if (!rows.has(c.y)) rows.set(c.y, []);
-    rows.get(c.y).push(c.x);
-  }
-
-  const ys = Array.from(rows.keys()).sort((a, b) => a - b);
-  const route = [];
-
-  for (let i = 0; i < ys.length; i++) {
-    const y = ys[i];
-    const xs = rows.get(y).sort((a, b) => a - b);
-    const runs = contiguousRuns(xs);
-
-    if (i % 2 === 1) runs.reverse();
-
-    for (const run of runs) {
-      const seq = [];
-      if (i % 2 === 0) {
-        for (let x = run.start; x <= run.end; x++) {
-          if (set.has(cellKey(x, y))) seq.push({ x, y });
-        }
-      } else {
-        for (let x = run.end; x >= run.start; x--) {
-          if (set.has(cellKey(x, y))) seq.push({ x, y });
-        }
-      }
-
-      if (seq.length === 0) continue;
-
-      const points = seq.map(cell => cellCenterPoint(grid, cell));
-
-      if (route.length === 0) {
-        route.push(...points);
-        continue;
-      }
-
-      const from = route[route.length - 1].cell;
-      const to = seq[0];
-
-      let connector = cheapOwnedConnector(grid, droneId, from, to);
-      if (!connector) connector = shortestOwnedCellPath(grid, droneId, from, to);
-
-      if (connector && connector.length > 1) {
-        route.push(...connector.slice(1).map(cell => cellCenterPoint(grid, cell)));
-      }
-
-      route.push(...points);
-    }
-  }
-
-  return simplifyPoints(route);
-}
-
-function contiguousRuns(xs) {
-  if (xs.length === 0) return [];
-  const runs = [];
-  let start = xs[0];
-  let prev = xs[0];
-
-  for (let i = 1; i < xs.length; i++) {
-    if (xs[i] === prev + 1) {
-      prev = xs[i];
-      continue;
-    }
-    runs.push({ start, end: prev });
-    start = xs[i];
-    prev = xs[i];
-  }
-
-  runs.push({ start, end: prev });
-  return runs;
-}
-
-function isInsideGrid(grid, x, y) {
-  return x >= 0 && y >= 0 && x < grid.width && y < grid.height;
-}
-
-function neighbors4(cell) {
-  return [
-    { x: cell.x + 1, y: cell.y },
-    { x: cell.x - 1, y: cell.y },
-    { x: cell.x, y: cell.y + 1 },
-    { x: cell.x, y: cell.y - 1 }
-  ];
-}
-
-function neighbors8(cell) {
-  return [
-    { x: cell.x + 1, y: cell.y },
-    { x: cell.x - 1, y: cell.y },
-    { x: cell.x, y: cell.y + 1 },
-    { x: cell.x, y: cell.y - 1 },
-    { x: cell.x + 1, y: cell.y + 1 },
-    { x: cell.x + 1, y: cell.y - 1 },
-    { x: cell.x - 1, y: cell.y + 1 },
-    { x: cell.x - 1, y: cell.y - 1 }
-  ];
-}
-
-function touchesForeignOrEmpty(grid, droneId, cell) {
-  for (const n of neighbors8(cell)) {
-    if (!isInsideGrid(grid, n.x, n.y)) return true;
-    const o = grid.owner[n.y][n.x];
-    if (o !== droneId) return true;
-  }
-  return false;
-}
-
-function seamBiasCost(grid, droneId, cell) {
-  let foreignAdj = 0;
-  let emptyAdj = 0;
-  let ownedAdj = 0;
-
-  for (const n of neighbors8(cell)) {
-    if (!isInsideGrid(grid, n.x, n.y)) {
-      emptyAdj++;
-      continue;
-    }
-    const o = grid.owner[n.y][n.x];
-    if (o === droneId) ownedAdj++;
-    else if (o === null) emptyAdj++;
-    else foreignAdj++;
-  }
-
-  const boundary = ownedAdj < 8;
-  let cost = boundary ? 2 : 28;
-  cost += ownedAdj * 2;
-  cost -= foreignAdj * 2;
-  cost -= emptyAdj;
-
-  return Math.max(1, cost);
-}
-
-function heuristic(a, b) {
-  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
-}
-
-function reconstructPath(prev, goal) {
-  const out = [];
-  let cur = goal;
-  while (cur) {
-    out.push(cur);
-    cur = prev.get(cellKey(cur.x, cur.y)) || null;
-  }
-  out.reverse();
-  return out;
-}
-
-function shortestOwnedCellPath(grid, droneId, start, goal) {
-  const a = cellKey(start.x, start.y);
-  const b = cellKey(goal.x, goal.y);
-  const cacheKey = droneId + '|' + a + '|' + b;
-
-  if (pathCache.has(cacheKey)) return pathCache.get(cacheKey);
-
-  const reverseKey = droneId + '|' + b + '|' + a;
-  if (pathCache.has(reverseKey)) {
-    const rev = pathCache.get(reverseKey);
-    const out = rev ? rev.slice().reverse() : null;
-    pathCache.set(cacheKey, out);
-    return out;
-  }
-
-  const path = seamHuggingOwnedPath(grid, droneId, start, goal);
-  pathCache.set(cacheKey, path);
-  return path;
-}
-
-function seamHuggingOwnedPath(grid, droneId, start, goal) {
-  const startKey = cellKey(start.x, start.y);
-  const goalKey = cellKey(goal.x, goal.y);
-
-  const heap = new MinHeap();
-  const prev = new Map();
-  const gScore = new Map();
-  const closed = new Set();
-
-  gScore.set(startKey, 0);
-  heap.push({
-    x: start.x,
-    y: start.y,
-    key: startKey,
-    f: heuristic(start, goal)
-  });
-
-  while (heap.size > 0) {
-    const current = heap.pop();
-    if (!current) break;
-    if (closed.has(current.key)) continue;
-    closed.add(current.key);
-
-    if (current.key === goalKey) {
-      return reconstructPath(prev, { x: current.x, y: current.y });
-    }
-
-    for (const n of neighbors4(current)) {
-      if (!isInsideGrid(grid, n.x, n.y)) continue;
-      if (grid.owner[n.y][n.x] !== droneId) continue;
-
-      const nk = cellKey(n.x, n.y);
-      if (closed.has(nk)) continue;
-
-      const tentative = (gScore.get(current.key) ?? Infinity) + seamBiasCost(grid, droneId, n);
-
-      if (tentative < (gScore.get(nk) ?? Infinity)) {
-        prev.set(nk, { x: current.x, y: current.y });
-        gScore.set(nk, tentative);
-        heap.push({
-          x: n.x,
-          y: n.y,
-          key: nk,
-          f: tentative + heuristic(n, goal)
-        });
-      }
-    }
-  }
-
-  return null;
-}
-
-function weightedCellPathCost(grid, droneId, path) {
-  let cost = 0;
-  for (let i = 1; i < path.length; i++) {
-    cost += seamBiasCost(grid, droneId, path[i]);
-  }
-  return cost;
-}
-
-function cheapOwnedConnector(grid, droneId, start, goal) {
-  if (start.x === goal.x) {
-    const dir = goal.y > start.y ? 1 : -1;
-    const path = [{ x: start.x, y: start.y }];
-    for (let y = start.y + dir; y !== goal.y + dir; y += dir) {
-      if (!isInsideGrid(grid, start.x, y)) return null;
-      if (grid.owner[y][start.x] !== droneId) return null;
-      path.push({ x: start.x, y });
-    }
-    return path;
-  }
-
-  if (start.y === goal.y) {
-    const dir = goal.x > start.x ? 1 : -1;
-    const path = [{ x: start.x, y: start.y }];
-    for (let x = start.x + dir; x !== goal.x + dir; x += dir) {
-      if (!isInsideGrid(grid, x, start.y)) return null;
-      if (grid.owner[start.y][x] !== droneId) return null;
-      path.push({ x, y: start.y });
-    }
-    return path;
-  }
-
-  return null;
-}
-
-function cellCenterPoint(grid, cell) {
-  return {
-    x: grid.xMin + (cell.x + 0.5) * grid.cell,
-    y: grid.yMin + (cell.y + 0.5) * grid.cell,
-    cell: { x: cell.x, y: cell.y }
-  };
-}
-
-function cellKey(x, y) {
-  return x + ':' + y;
-}
-
-function simplifyPoints(points) {
-  if (points.length <= 2) return points.slice();
-
-  const out = [points[0]];
-
-  for (let i = 1; i < points.length - 1; i++) {
-    const a = out[out.length - 1];
-    const b = points[i];
-    const c = points[i + 1];
-
-    const abx = b.x - a.x;
-    const aby = b.y - a.y;
-    const bcx = c.x - b.x;
-    const bcy = c.y - b.y;
-
-    const cross = abx * bcy - aby * bcx;
-    if (Math.abs(cross) < 1e-9) continue;
-
-    out.push(b);
-  }
-
-  out.push(points[points.length - 1]);
-  return out;
-}
-
-function fmtArea(m2) {
-  if (m2 > 1e6) return (m2 / 1e6).toFixed(2) + ' km²';
-  if (m2 > 1e4) return (m2 / 1e4).toFixed(2) + ' ha';
-  return Math.round(m2) + ' m²';
-}
-
-let pathUpdateHandle = null;
-
-function schedulePathUpdate() {
-  if (pathUpdateHandle) return;
-  pathUpdateHandle = requestAnimationFrame(() => {
-    pathUpdateHandle = null;
-    drawPaths();
-  });
-}
-
-function drawPaths() {
+function drawPaths(){
   pathLayer.clearLayers();
-  const { paths, coverage } = computePaths();
-
-  for (const d of drones) {
-    const pts = paths[d.id];
-    if (!pts || pts.length < 2) continue;
-
-    L.polyline(pts, {
-      pane: 'pathPane',
-      color: d.color,
-      weight: 2,
-      opacity: 0.95,
-      lineCap: 'round',
-      lineJoin: 'round'
-    }).addTo(pathLayer);
-  }
-
-  document.getElementById('stat-count').textContent = drones.length;
-  document.getElementById('stat-area').textContent = fmtArea(coverage);
-  document.getElementById('stat-overlap').textContent = '0 m²';
-}
-
-function renderList() {
-  const list = document.getElementById('drone-list');
-  if (drones.length === 0) {
-    const hint = window.ARGUS_MODE === 'plan'
-      ? 'No drones. Click the map to add one.'
-      : 'No connected drones. Use “Register drone”.';
-    list.innerHTML = `<div class="empty">${hint}</div>`;
-    return;
-  }
-
-  list.innerHTML = '';
-  for (const d of drones) {
-    const row = document.createElement('div');
-    const isLive = !!(d.sourceId && window.ARGUS_MODE !== 'plan');
-    row.className = 'drone-item' + (d.id === selectedId ? ' selected' : '') + (isLive ? ' live-row' : '');
-    const name = d.label || ('D' + d.id);
-    const dotClass = d.online === false ? 'offline' : (d.online === true ? 'online' : '');
-    const controlHtml = isLive
-      ? `<a class="control-btn" href="/drone/${encodeURIComponent(d.sourceId)}" title="Open single-drone control (joysticks + live video)">Control ↗</a>`
-      : '';
-    row.innerHTML = `
-      <span class="id-col">
-        <span class="swatch" style="background:${d.color}"></span>
-        <span class="status-dot ${dotClass}"></span>
-        <span>${escapeText(name)}</span>
-      </span>
-      <span class="meta-col">
-        <span class="meta">${d.reach} m</span>
-        ${controlHtml}
-      </span>
-    `;
-    row.addEventListener('click', (e) => {
-      if (e.target.closest('.control-btn')) return;
-      // In Live mode the row itself is a shortcut to the control page.
-      if (isLive && !e.shiftKey) {
-        location.href = `/drone/${encodeURIComponent(d.sourceId)}`;
-        return;
-      }
-      // Plan mode (or shift-click to inspect): pan + select.
-      selectDrone(d.id);
-      map.panTo([d.lat, d.lng]);
-    });
-    list.appendChild(row);
+  const{paths,coverage}=computePaths();
+  for(const[,d]of liveByBackendId){
+    const pts=paths[d.sourceId];
+    if(!pts||pts.length<2)continue;
+    L.polyline(pts,{pane:'pathPane',color:d.color,weight:2,opacity:0.9,lineCap:'round',lineJoin:'round'}).addTo(pathLayer);
   }
 }
 
-function escapeText(s) {
-  return String(s).replace(/[&<>"']/g, c =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-
-function updateSelectedPanel() {
-  const panel = document.getElementById('selected-panel');
-  const d = drones.find(x => x.id === selectedId);
-  if (!d) {
-    panel.style.display = 'none';
-    return;
-  }
-
-  panel.style.display = '';
-  const displayId = d.label || d.sourceId || ('D' + d.id);
-  document.getElementById('sel-id').textContent = displayId;
-  document.getElementById('reach-val').textContent = d.reach;
-  document.getElementById('reach-slider').value = d.reach;
-  document.getElementById('sel-coords').textContent = d.lat.toFixed(5) + ', ' + d.lng.toFixed(5);
-
-  // Only live drones (those backed by a registry entry) get a Control link.
-  const ctrlRow = document.getElementById('sel-control-row');
-  const ctrlLink = document.getElementById('sel-control-link');
-  if (d.sourceId && window.ARGUS_MODE !== 'plan') {
-    ctrlRow.style.display = '';
-    ctrlLink.href = `/drone/${encodeURIComponent(d.sourceId)}`;
-  } else {
-    ctrlRow.style.display = 'none';
-  }
-}
-
-function refresh() {
-  renderList();
-  updateSelectedPanel();
-  drawPaths();
-}
-
-document.getElementById('reach-slider').addEventListener('input', (e) => {
-  const d = drones.find(x => x.id === selectedId);
-  if (!d) return;
-  d.reach = parseInt(e.target.value, 10);
-  d.circle.setRadius(d.reach);
-  document.getElementById('reach-val').textContent = d.reach;
-  renderList();
+// Pathing controls
+document.getElementById('stripe-spacing').addEventListener('input',(e)=>{
+  stripeSpacing=parseInt(e.target.value,10);
+  document.getElementById('stripe-val').textContent=stripeSpacing;
   schedulePathUpdate();
 });
+document.getElementById('dir-ew').addEventListener('click',()=>{sweepDir='ew';document.getElementById('dir-ew').classList.add('active');document.getElementById('dir-ns').classList.remove('active');drawPaths();});
+document.getElementById('dir-ns').addEventListener('click',()=>{sweepDir='ns';document.getElementById('dir-ns').classList.add('active');document.getElementById('dir-ew').classList.remove('active');drawPaths();});
+initToggle('pathing-toggle','pathing-body');
 
-document.getElementById('stripe-spacing').addEventListener('input', (e) => {
-  stripeSpacing = parseInt(e.target.value, 10);
-  document.getElementById('stripe-val').textContent = stripeSpacing;
-  schedulePathUpdate();
-});
-
-document.getElementById('dir-ew').addEventListener('click', () => setDir('ew'));
-document.getElementById('dir-ns').addEventListener('click', () => setDir('ns'));
-
-function setDir(d) {
-  sweepDir = d;
-  document.getElementById('dir-ew').classList.toggle('active', d === 'ew');
-  document.getElementById('dir-ns').classList.toggle('active', d === 'ns');
-  drawPaths();
+function addLiveDrone(s, lat, lng) {
+  const idx = liveByBackendId.size;
+  const color = PALETTE[idx % PALETTE.length];
+  const marker = L.circleMarker([lat, lng], { radius: 8, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 }).addTo(map);
+  marker.bindTooltip(s.label || s.id, { permanent: true, direction: 'top', offset: [0, -6], className: 'drone-label' });
+  const circle = L.circle([lat, lng], { pane: 'coveragePane', interactive: false, radius: s.reach_m || 800, color, weight: 1, opacity: 0.8, dashArray: '6 6', fillColor: color, fillOpacity: 0.06 }).addTo(map);
+  const entry = { marker, circle, sourceId: s.id, label: s.label || s.id, online: !!s.online, color, lat, lng, reach: s.reach_m || 800 };
+  liveByBackendId.set(s.id, entry);
+  return entry;
 }
 
-document.getElementById('btn-delete').addEventListener('click', () => {
-  if (selectedId !== null) deleteDrone(selectedId);
-});
-
-document.getElementById('btn-center').addEventListener('click', () => {
-  const d = drones.find(x => x.id === selectedId);
-  if (d) map.panTo([d.lat, d.lng]);
-});
-
-document.getElementById('btn-clear').addEventListener('click', () => {
-  clearAllDrones();
-});
-
-document.getElementById('btn-demo').addEventListener('click', () => {
-  clearAllDrones();
-  const c = map.getCenter();
-  const offs = [
-    [-0.006, -0.008, 700],
-    [0.004, -0.003, 900],
-    [0.002, 0.010, 650],
-    [-0.008, 0.006, 800]
-  ];
-  offs.forEach(([dLat, dLng, r]) => addDrone(c.lat + dLat, c.lng + dLng, r));
-});
-
-document.addEventListener('keydown', (e) => {
-  if (e.target.matches('input, textarea')) return;
-  if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId !== null) {
-    e.preventDefault();
-    deleteDrone(selectedId);
-  }
-});
-
-renderList();
-
-// ── ARGUS: mode toggle, live drone sync, runtime registration ─────────
-(function () {
-  window.ARGUS_MODE = 'live';
-
-  const helpLive = document.getElementById('help-live');
-  const helpPlan = document.getElementById('help-plan');
-  const planActions = document.getElementById('plan-actions');
-  const banner = document.getElementById('live-banner');
-  const btnModeLive = document.getElementById('mode-live');
-  const btnModePlan = document.getElementById('mode-plan');
-  const savedPlanState = { snapshot: null };
-
-  function setBanner(text, cls) {
-    banner.textContent = text;
-    banner.classList.remove('is-warn', 'is-err');
-    if (cls) banner.classList.add(cls);
-  }
-
-  function setMode(mode) {
-    if (mode === window.ARGUS_MODE) return;
-    window.ARGUS_MODE = mode;
-    btnModeLive.classList.toggle('active', mode === 'live');
-    btnModePlan.classList.toggle('active', mode === 'plan');
-    helpLive.classList.toggle('hidden', mode !== 'live');
-    helpPlan.classList.toggle('hidden', mode !== 'plan');
-    planActions.classList.toggle('hidden', mode !== 'plan');
-    banner.classList.toggle('hidden', mode !== 'live');
-
-    if (mode === 'plan') {
-      // Stop live sync and clear the map so the planner starts on a blank canvas.
-      stopLivePolling();
-      liveByBackendId.clear();
-      clearAllDrones();
+function reconcileLive(snapshots) {
+  const seen = new Set();
+  for (const s of snapshots) {
+    seen.add(s.id);
+    const lat = s.lat ?? s.home_lat;
+    const lng = s.lng ?? s.home_lng;
+    if (lat == null || lng == null) continue;
+    const existing = liveByBackendId.get(s.id);
+    if (!existing) {
+      addLiveDrone(s, lat, lng);
     } else {
-      // Returning to live: clear planning-only drones and resume polling.
-      clearAllDrones();
-      liveByBackendId.clear();
-      startLivePolling();
+      existing.lat = lat; existing.lng = lng;
+      existing.label = s.label || s.id;
+      existing.online = !!s.online;
+      if (s.reach_m) { existing.reach = s.reach_m; existing.circle.setRadius(s.reach_m); }
+      existing.marker.setLatLng([lat, lng]);
+      existing.circle.setLatLng([lat, lng]);
+      existing.marker.setTooltipContent(s.label || s.id);
     }
   }
+  // Remove gone drones
+  for (const [id, d] of liveByBackendId) {
+    if (!seen.has(id)) {
+      map.removeLayer(d.marker);
+      map.removeLayer(d.circle);
+      liveByBackendId.delete(id);
+    }
+  }
+  renderList();
+  schedulePathUpdate();
+}
 
-  btnModeLive.addEventListener('click', () => setMode('live'));
-  btnModePlan.addEventListener('click', () => setMode('plan'));
-
-  // ── Live drone sync ─────────────────────────────────────────────────
-  let livePollHandle = null;
-  let liveWs = null;
-  let liveWsRetry = 1000;
-
-  function startLivePolling() {
+// ── Delete drone ──────────────────────────────────────────────────────────
+async function deleteDrone(sourceId) {
+  try {
+    const res = await fetch(`/api/drones/${encodeURIComponent(sourceId)}`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 404) throw new Error(res.status);
     fetchAndRender();
-    stopLivePolling();
-    livePollHandle = setInterval(fetchAndRender, 5000);
-    connectLiveWs();
+  } catch (e) {
+    console.warn('Delete failed:', e.message);
   }
+}
 
-  function stopLivePolling() {
-    if (livePollHandle) clearInterval(livePollHandle);
-    livePollHandle = null;
-    if (liveWs) {
-      try { liveWs.close(); } catch (_) { /* ignore */ }
+// ── Drone grid (cameras are the list) ────────────────────────────────────
+function renderList() {
+  const grid = document.getElementById('drone-cameras');
+  const emptyEl = document.getElementById('drone-empty');
+  const count = liveByBackendId.size;
+  document.getElementById('drone-count').textContent = count;
+
+  const sectionHidden = document.getElementById('drones-body').classList.contains('is-hidden');
+
+  if (count === 0) {
+    stopCameras();
+    emptyEl.classList.remove('hidden');
+    return;
+  }
+  emptyEl.classList.add('hidden');
+
+  if (sectionHidden) { stopCameras(); return; }
+
+  // Reconcile tiles: add new, remove gone
+  const existing = new Map();
+  for (const tile of grid.querySelectorAll('.cam-tile')) existing.set(tile.dataset.sid, tile);
+
+  const seen = new Set();
+  for (const [, d] of liveByBackendId) {
+    seen.add(d.sourceId);
+    if (existing.has(d.sourceId)) {
+      // Update status dot
+      const dot = existing.get(d.sourceId).querySelector('.cam-dot');
+      if (dot) { dot.className = 'cam-dot ' + (d.online ? 'online' : 'offline'); }
+      continue;
     }
-    liveWs = null;
-  }
 
-  async function fetchAndRender() {
-    if (window.ARGUS_MODE !== 'live') return;
-    try {
-      const res = await fetch('/api/drones');
-      if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
-      const data = await res.json();
-      reconcileLive(data.drones || []);
-      if ((data.drones || []).length === 0) {
-        setBanner('No connected drones. Register one to get started.', 'is-warn');
-      } else {
-        setBanner(`${data.drones.length} drone${data.drones.length === 1 ? '' : 's'} connected`);
+    const tile = document.createElement('div');
+    tile.className = 'cam-tile';
+    tile.dataset.sid = d.sourceId;
+    tile.title = d.label;
+    tile.style.cursor = 'pointer';
+    tile.addEventListener('click', () => map.panTo([d.lat, d.lng]));
+
+    const img = document.createElement('img');
+    img.src = `/api/drones/${encodeURIComponent(d.sourceId)}/video.mjpg?t=${Date.now()}`;
+    img.alt = d.label;
+    img.onerror = () => {
+      img.style.display = 'none';
+      if (!tile.querySelector('.cam-no-signal')) {
+        const ns = document.createElement('div');
+        ns.className = 'cam-no-signal';
+        ns.textContent = 'no signal';
+        tile.insertBefore(ns, tile.firstChild);
       }
-    } catch (e) {
-      setBanner('Could not reach the ARGUS backend: ' + e.message, 'is-err');
-    }
+    };
+    tile.appendChild(img);
+
+    // Delete button (top-left)
+    const del = document.createElement('button');
+    del.className = 'cam-delete';
+    del.textContent = '✕';
+    del.title = 'Remove drone';
+    del.addEventListener('click', (e) => { e.stopPropagation(); deleteDrone(d.sourceId); });
+    tile.appendChild(del);
+
+    // Expand link → camera wall (top-right)
+    const exp = document.createElement('a');
+    exp.className = 'cam-expand';
+    exp.href = '/cameras';
+    exp.title = 'Open camera wall';
+    exp.textContent = '⛶';
+    exp.addEventListener('click', (e) => e.stopPropagation());
+    tile.appendChild(exp);
+
+    const lbl = document.createElement('div');
+    lbl.className = 'cam-label';
+    lbl.innerHTML = `<span class="cam-dot ${d.online ? 'online' : 'offline'}"></span><span class="cam-name">${esc(d.label)}</span>`;
+    tile.appendChild(lbl);
+
+    grid.appendChild(tile);
   }
 
-  function connectLiveWs() {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    try {
-      liveWs = new WebSocket(`${proto}://${location.host}/ws/drones`);
-    } catch (_) {
-      liveWs = null;
-      return;
+  for (const [sid, tile] of existing) {
+    if (!seen.has(sid)) {
+      const img = tile.querySelector('img');
+      if (img) img.src = '';
+      grid.removeChild(tile);
     }
-    liveWs.addEventListener('open', () => { liveWsRetry = 1000; });
-    liveWs.addEventListener('message', (ev) => {
-      try {
-        const data = JSON.parse(ev.data);
-        reconcileLive(data.drones || []);
-      } catch (_) { /* ignore */ }
-    });
-    liveWs.addEventListener('close', () => {
-      if (window.ARGUS_MODE !== 'live') return;
-      setTimeout(connectLiveWs, liveWsRetry);
-      liveWsRetry = Math.min(liveWsRetry * 2, 10000);
-    });
   }
+}
 
-  // Key the UI drone set by backend id so we don't churn markers.
-  const liveByBackendId = new Map();
+function stopCameras() {
+  const grid = document.getElementById('drone-cameras');
+  for (const img of grid.querySelectorAll('img')) img.src = '';
+  grid.innerHTML = '';
+}
 
-  function reconcileLive(snapshots) {
-    if (window.ARGUS_MODE !== 'live') return;
-    const seen = new Set();
+// renderCameras is now just renderList — keep alias for toggle handler
+function renderCameras() { renderList(); }
 
-    for (const s of snapshots) {
-      seen.add(s.id);
-      const existing = liveByBackendId.get(s.id);
-      const lat = (s.lat != null) ? s.lat : s.home_lat;
-      const lng = (s.lng != null) ? s.lng : s.home_lng;
-      if (lat == null || lng == null) continue;  // nothing to place
+// ── Collapsible sections ──────────────────────────────────────────────────
+function initToggle(toggleId, bodyId, onOpen) {
+  const toggle = document.getElementById(toggleId);
+  const body = document.getElementById(bodyId);
+  toggle.addEventListener('click', () => {
+    const nowHidden = body.classList.toggle('is-hidden');
+    toggle.classList.toggle('is-collapsed', nowHidden);
+    if (!nowHidden && onOpen) onOpen();
+    if (nowHidden && bodyId === 'drones-body') stopCameras();
+  });
+}
 
-      if (!existing) {
-        addDrone(lat, lng, s.reach_m || 800);
-        const d = drones[drones.length - 1];
-        d.sourceId = s.id;
-        d.label = s.label || s.id;
-        d.online = !!s.online;
-        liveByBackendId.set(s.id, d);
-      } else {
-        existing.lat = lat;
-        existing.lng = lng;
-        existing.label = s.label || s.id;
-        existing.online = !!s.online;
-        if (s.reach_m) existing.reach = s.reach_m;
-        existing.marker.setLatLng([lat, lng]);
-        existing.circle.setLatLng([lat, lng]);
-        if (s.reach_m) existing.circle.setRadius(s.reach_m);
-        existing.marker.setTooltipContent(s.label || s.id);
-      }
-    }
+initToggle('notif-toggle', 'notif-body', () => {
+  document.getElementById('notif-badge').textContent = '';
+});
 
-    // Remove drones that disappeared from the backend.
-    for (const [backendId, d] of Array.from(liveByBackendId.entries())) {
-      if (!seen.has(backendId)) {
-        deleteDrone(d.id, true);
-        liveByBackendId.delete(backendId);
-      }
-    }
-    refresh();
+initToggle('drones-toggle', 'drones-body', renderCameras);
+
+// ── Detections API (not yet implemented — call addDetection() when ready) ─
+let unread = 0;
+
+function addDetection(droneId, text, cls) {
+  const empty = document.getElementById('notif-empty');
+  if (empty) empty.remove();
+
+  const badge = document.getElementById('notif-badge');
+  const list = document.getElementById('notif-list');
+  const notifBody = document.getElementById('notif-body');
+
+  const li = document.createElement('li');
+  li.className = 'notif-item' + (cls ? ' is-' + cls : '');
+  const ts = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const d = liveByBackendId.get(droneId);
+  const label = d ? d.label : droneId;
+  li.innerHTML = `<span class="notif-ts">${ts}</span><span class="notif-drone">${esc(label)}</span><span class="notif-text">${esc(text)}</span>`;
+  list.insertBefore(li, list.firstChild);
+  while (list.children.length > 50) list.removeChild(list.lastChild);
+
+  if (notifBody.classList.contains('is-hidden')) {
+    unread++;
+    badge.textContent = unread > 9 ? '9+' : String(unread);
   }
+}
+window.argusAddDetection = addDetection; // expose for future backend push
 
-  // ── Register drone (three-step: metadata → place → preview slider) ───
+// ── Prompt dispatch ───────────────────────────────────────────────────────
+document.getElementById('btn-dispatch').addEventListener('click', () => {
+  const prompt = document.getElementById('prompt-textarea').value.trim();
+  if (!prompt) return;
+  // TODO: POST to /api/dispatch or equivalent when SAM3 loop is wired
+  console.log('Dispatch prompt:', prompt);
+});
+
+// ── Live sync ─────────────────────────────────────────────────────────────
+let livePollHandle = null;
+let liveWs = null;
+let liveWsRetry = 1000;
+
+async function fetchAndRender() {
+  try {
+    const res = await fetch('/api/drones');
+    if (!res.ok) throw new Error(res.status);
+    const data = await res.json();
+    reconcileLive(data.drones || []);
+  } catch (e) {
+    console.warn('ARGUS poll failed:', e.message);
+  }
+}
+
+function connectLiveWs() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  try { liveWs = new WebSocket(`${proto}://${location.host}/ws/drones`); } catch (_) { return; }
+  liveWs.addEventListener('open', () => { liveWsRetry = 1000; });
+  liveWs.addEventListener('message', (ev) => {
+    try { reconcileLive(JSON.parse(ev.data).drones || []); } catch (_) {}
+  });
+  liveWs.addEventListener('close', () => { setTimeout(connectLiveWs, liveWsRetry); liveWsRetry = Math.min(liveWsRetry * 2, 10000); });
+}
+
+fetchAndRender();
+livePollHandle = setInterval(fetchAndRender, 5000);
+connectLiveWs();
+
+// ── Registration (3-step: dialog → map click → slider confirm) ───────────
+(function () {
   const dlg = document.getElementById('add-dialog');
   const regErr = document.getElementById('reg-error');
   const regId = document.getElementById('reg-id');
@@ -1352,7 +833,6 @@ renderList();
   const regIp = document.getElementById('reg-ip');
   const regMock = document.getElementById('reg-mock');
   const mapEl = document.getElementById('map');
-
   const placePanel = document.getElementById('place-panel');
   const placeIdEl = document.getElementById('place-id');
   const placeCoordsEl = document.getElementById('place-coords');
@@ -1360,174 +840,24 @@ renderList();
   const placeReachVal = document.getElementById('place-reach-val');
   const placeErr = document.getElementById('place-err');
   const placeConfirmBtn = document.getElementById('place-confirm');
-  const placeCancelBtn = document.getElementById('place-cancel');
 
-  // Registration state machine:
-  //   null                    → idle
-  //   {phase: 'arm',  body}   → dialog closed, waiting for a map click
-  //   {phase: 'preview', body, previewLayer, previewCircle, reach} → slider active
   let regState = null;
 
-  function openRegister() {
-    cancelRegistration({ silent: true });
-    regErr.textContent = '';
-    regId.value = '';
-    regLabel.value = '';
-    regIp.value = '';
-    regMock.checked = false;
-    regIp.disabled = false;
-    regIp.placeholder = '192.168.1.100';
-    if (typeof dlg.showModal === 'function') dlg.showModal();
-    else dlg.setAttribute('open', '');
+  document.getElementById('btn-register').addEventListener('click', () => {
+    cancel({ silent: true });
+    regErr.textContent = ''; regId.value = ''; regLabel.value = ''; regIp.value = '';
+    regMock.checked = false; regIp.disabled = false;
+    if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
     setTimeout(() => regId.focus(), 0);
-  }
+  });
 
   regMock.addEventListener('change', () => {
-    if (regMock.checked) {
-      regIp.value = 'mock';
-      regIp.disabled = true;
-    } else {
-      regIp.disabled = false;
-      if (regIp.value === 'mock') regIp.value = '';
-    }
+    if (regMock.checked) { regIp.value = 'mock'; regIp.disabled = true; }
+    else { regIp.disabled = false; if (regIp.value === 'mock') regIp.value = ''; }
   });
 
-  function armPlacement(body) {
-    regState = { phase: 'arm', body };
-    mapEl.classList.add('placement-arm');
-    setBanner(`Click the map to place "${body.id}" (Esc to cancel)`, 'is-warn');
-  }
-
-  function enterPreview(latlng) {
-    if (!regState || regState.phase !== 'arm') return;
-    const body = regState.body;
-    const reach = 800;
-    const color = PALETTE[(Math.random() * PALETTE.length) | 0];
-
-    const previewMarker = L.circleMarker(latlng, {
-      radius: 9,
-      color: '#fff',
-      weight: 2,
-      fillColor: color,
-      fillOpacity: 1,
-    }).addTo(map);
-    previewMarker.bindTooltip(body.id, {
-      permanent: true, direction: 'top', offset: [0, -8], className: 'drone-label',
-    });
-
-    const previewCircle = L.circle(latlng, {
-      pane: 'coveragePane',
-      interactive: false,
-      radius: reach,
-      color,
-      weight: 2,
-      opacity: 1,
-      dashArray: '6 6',
-      fillColor: color,
-      fillOpacity: 0.10,
-    }).addTo(map);
-
-    regState = {
-      phase: 'preview',
-      body,
-      latlng,
-      reach,
-      color,
-      previewMarker,
-      previewCircle,
-    };
-
-    placeIdEl.textContent = body.id + (body.mock ? '  (mock)' : '');
-    placeCoordsEl.textContent = `${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}`;
-    placeSlider.value = String(reach);
-    placeReachVal.textContent = reach;
-    placeErr.textContent = '';
-    placePanel.classList.remove('hidden');
-    placeConfirmBtn.disabled = false;
-    mapEl.classList.remove('placement-arm');
-    setBanner(`Drag the slider to set "${body.id}"'s coverage radius, then Register.`);
-  }
-
-  function cancelRegistration({ silent = false } = {}) {
-    if (!regState) return;
-    if (regState.phase === 'preview') {
-      if (regState.previewMarker) map.removeLayer(regState.previewMarker);
-      if (regState.previewCircle) map.removeLayer(regState.previewCircle);
-      placePanel.classList.add('hidden');
-    }
-    regState = null;
-    mapEl.classList.remove('placement-arm');
-    if (!silent) fetchAndRender();
-  }
-
-  // Consumed by map.on('click'): returns true if the click was consumed.
-  window.__argusPlaceClick = function (latlng) {
-    if (!regState) return false;
-    if (regState.phase === 'arm') {
-      enterPreview(latlng);
-      return true;
-    }
-    // In preview, allow re-placement by clicking again.
-    if (regState.phase === 'preview') {
-      regState.latlng = latlng;
-      regState.previewMarker.setLatLng(latlng);
-      regState.previewCircle.setLatLng(latlng);
-      placeCoordsEl.textContent = `${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}`;
-      return true;
-    }
-    return false;
-  };
-
-  placeSlider.addEventListener('input', (e) => {
-    if (!regState || regState.phase !== 'preview') return;
-    const reach = parseInt(e.target.value, 10);
-    regState.reach = reach;
-    regState.previewCircle.setRadius(reach);
-    placeReachVal.textContent = reach;
-  });
-
-  placeCancelBtn.addEventListener('click', () => {
-    cancelRegistration();
-    setBanner('Registration cancelled.', 'is-warn');
-  });
-
-  placeConfirmBtn.addEventListener('click', async () => {
-    if (!regState || regState.phase !== 'preview') return;
-    placeErr.textContent = '';
-    placeConfirmBtn.disabled = true;
-    const body = Object.assign({}, regState.body, {
-      home_lat: regState.latlng.lat,
-      home_lng: regState.latlng.lng,
-      reach_m: regState.reach,
-    });
-    try {
-      const res = await fetch('/api/drones', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const detail = await res.json().catch(() => ({ detail: res.statusText }));
-        throw new Error(detail.detail || res.statusText);
-      }
-      // Success: tear down the preview and let the live sync paint the real marker.
-      cancelRegistration({ silent: true });
-      fetchAndRender();
-    } catch (e) {
-      placeErr.textContent = 'Registration failed: ' + e.message;
-      placeConfirmBtn.disabled = false;
-    }
-  });
-
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && regState) {
-      cancelRegistration();
-      setBanner('Registration cancelled.', 'is-warn');
-    }
-  });
-
-  document.getElementById('btn-register').addEventListener('click', () => openRegister());
   document.getElementById('reg-cancel').addEventListener('click', () => dlg.close());
+
   document.getElementById('reg-save').addEventListener('click', () => {
     regErr.textContent = '';
     const isMock = regMock.checked;
@@ -1538,109 +868,82 @@ renderList();
     const body = { id, rc_ip: rcIp, mock: isMock };
     if (regLabel.value.trim()) body.label = regLabel.value.trim();
     dlg.close();
-    armPlacement(body);
+    regState = { phase: 'arm', body };
+    mapEl.classList.add('placement-arm');
   });
 
-  // ── Save plan ──────────────────────────────────────────────────────
-  document.getElementById('btn-save-plan').addEventListener('click', async () => {
-    if (window.ARGUS_MODE !== 'plan') return;
-    const planDrones = drones.map(d => ({ id: d.id, lat: d.lat, lng: d.lng, reach: d.reach }));
-    const { paths } = computePaths();
-    try {
-      const res = await fetch('/api/plans', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          drones: planDrones,
-          paths,
-          params: { stripeSpacing, sweepDir },
-        }),
-      });
-      if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
-      const data = await res.json();
-      alert('Plan saved: ' + data.name);
-    } catch (e) {
-      alert('Save failed: ' + e.message);
+  window.__argusPlaceClick = function (latlng) {
+    if (!regState) return false;
+    if (regState.phase === 'arm') {
+      const { body } = regState;
+      const reach = 800;
+      const color = PALETTE[(Math.random() * PALETTE.length) | 0];
+      const pm = L.circleMarker(latlng, { radius: 9, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 }).addTo(map);
+      pm.bindTooltip(body.id, { permanent: true, direction: 'top', offset: [0, -8], className: 'drone-label' });
+      const pc = L.circle(latlng, { pane: 'coveragePane', interactive: false, radius: reach, color, weight: 2, opacity: 1, dashArray: '6 6', fillColor: color, fillOpacity: 0.10 }).addTo(map);
+      regState = { phase: 'preview', body, latlng, reach, pm, pc };
+      placeIdEl.textContent = body.id + (body.mock ? ' (mock)' : '');
+      placeCoordsEl.textContent = `${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}`;
+      placeSlider.value = String(reach); placeReachVal.textContent = reach;
+      placeErr.textContent = ''; placeConfirmBtn.disabled = false;
+      placePanel.classList.remove('hidden');
+      mapEl.classList.remove('placement-arm');
+      return true;
     }
+    if (regState.phase === 'preview') {
+      regState.latlng = latlng;
+      regState.pm.setLatLng(latlng);
+      regState.pc.setLatLng(latlng);
+      placeCoordsEl.textContent = `${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}`;
+      return true;
+    }
+    return false;
+  };
+
+  placeSlider.addEventListener('input', (e) => {
+    if (!regState || regState.phase !== 'preview') return;
+    const r = parseInt(e.target.value, 10);
+    regState.reach = r; regState.pc.setRadius(r); placeReachVal.textContent = r;
   });
 
-  // ── Live-aware reach slider + Delete ──────────────────────────────
-  // The existing handlers above update local state for visual feedback.
-  // Here we also persist those changes to the backend registry whenever the
-  // selected drone is a live drone (has sourceId).
+  document.getElementById('place-cancel').addEventListener('click', () => cancel());
 
-  let reachPatchTimer = null;
-  let reachPatchPending = null;
-
-  function schedulePatchReach(sourceId, reachM) {
-    reachPatchPending = { sourceId, reachM };
-    if (reachPatchTimer) clearTimeout(reachPatchTimer);
-    reachPatchTimer = setTimeout(flushReachPatch, 200);
-  }
-
-  async function flushReachPatch() {
-    if (!reachPatchPending) return;
-    const { sourceId, reachM } = reachPatchPending;
-    reachPatchPending = null;
-    reachPatchTimer = null;
+  placeConfirmBtn.addEventListener('click', async () => {
+    if (!regState || regState.phase !== 'preview') return;
+    placeErr.textContent = ''; placeConfirmBtn.disabled = true;
+    const body = { ...regState.body, home_lat: regState.latlng.lat, home_lng: regState.latlng.lng, reach_m: regState.reach };
     try {
-      const res = await fetch(`/api/drones/${encodeURIComponent(sourceId)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reach_m: reachM }),
-      });
-      if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
-    } catch (e) {
-      setBanner('Saving reach failed: ' + e.message, 'is-err');
-    }
-  }
-
-  document.getElementById('reach-slider').addEventListener('input', (e) => {
-    // selectDrone picks the selected local drone; if it carries a sourceId,
-    // persist the reach change to the backend (debounced).
-    const d = drones.find(x => x.id === selectedId);
-    if (!d || !d.sourceId) return;
-    schedulePatchReach(d.sourceId, parseInt(e.target.value, 10));
-  });
-
-  // Replace the Delete-button click handler so Live drones are removed from
-  // the backend registry (the marker then disappears on the next live tick).
-  const deleteBtn = document.getElementById('btn-delete');
-  const freshDelete = deleteBtn.cloneNode(true);
-  deleteBtn.parentNode.replaceChild(freshDelete, deleteBtn);
-  freshDelete.addEventListener('click', async () => {
-    const d = drones.find(x => x.id === selectedId);
-    if (!d) return;
-    if (!d.sourceId) {
-      // Planning drone: local delete is all we need.
-      deleteDrone(d.id);
-      return;
-    }
-    const sourceId = d.sourceId;
-    try {
-      const res = await fetch(`/api/drones/${encodeURIComponent(sourceId)}`, { method: 'DELETE' });
-      if (!res.ok && res.status !== 404) throw new Error(res.status + ' ' + res.statusText);
-      setBanner(`Removed drone "${sourceId}".`);
+      const res = await fetch('/api/drones', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!res.ok) { const d = await res.json().catch(() => ({ detail: res.statusText })); throw new Error(d.detail || res.statusText); }
+      cancel({ silent: true });
       fetchAndRender();
     } catch (e) {
-      setBanner('Delete failed: ' + e.message, 'is-err');
+      placeErr.textContent = 'Registration failed: ' + e.message;
+      placeConfirmBtn.disabled = false;
     }
   });
 
-  // Keyboard Del/Backspace: also route live drones through the backend.
   document.addEventListener('keydown', (e) => {
-    if (e.target.matches('input, textarea')) return;
-    if (e.key !== 'Delete' && e.key !== 'Backspace') return;
-    const d = drones.find(x => x.id === selectedId);
-    if (!d || !d.sourceId) return;  // planning path is handled by the original handler above
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    freshDelete.click();
-  }, true);
+    if (e.key === 'Escape' && regState) cancel();
+  });
 
-  // Kick off.
-  startLivePolling();
+  function cancel({ silent = false } = {}) {
+    if (!regState) return;
+    if (regState.phase === 'preview') {
+      map.removeLayer(regState.pm);
+      map.removeLayer(regState.pc);
+      placePanel.classList.add('hidden');
+    }
+    regState = null;
+    mapEl.classList.remove('placement-arm');
+    if (!silent) fetchAndRender();
+  }
 })();
+
+// ── Utility ───────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 </script>
 </body>
 </html>

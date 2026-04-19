@@ -74,6 +74,10 @@ def create_app(
         html = html.replace("</head>", injected + "\n</head>", 1)
         return HTMLResponse(html)
 
+    @app.get("/cameras", include_in_schema=False)
+    def cameras_wall():
+        return FileResponse(STATIC_DIR / "cameras.html")
+
     @app.get("/video", include_in_schema=False)
     def video_standalone():
         # Kept for backwards compatibility; user is expected to pass ?drone=ID.
