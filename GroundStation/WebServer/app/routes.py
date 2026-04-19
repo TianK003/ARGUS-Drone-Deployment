@@ -105,8 +105,25 @@ def get_detection_image(det_id: str, request: Request):
     return Response(content=img, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 swarm_sockets: Dict[str, WebSocket] = {}
+broadcast_lock = asyncio.Lock()
+is_broadcast_queued = False
+
+async def delayed_broadcast(app_state: Any, delay: float):
+    """Wait for the swarm to stabilize before calculating paths."""
+    global is_broadcast_queued
+    await asyncio.sleep(delay)
+    async with broadcast_lock:
+        is_broadcast_queued = False
+        broadcast_swarm_paths_now(app_state)
 
 def broadcast_swarm_paths(app_state: Any):
+    """Trailing-edge debounce for swarm pathing updates."""
+    global is_broadcast_queued
+    if not is_broadcast_queued:
+        is_broadcast_queued = True
+        asyncio.create_task(delayed_broadcast(app_state, 1.5))
+
+def broadcast_swarm_paths_now(app_state: Any):
     reg = app_state.registry
     drones_list = reg.list()
     
@@ -133,17 +150,15 @@ def broadcast_swarm_paths(app_state: Any):
         if drone_id not in swarm_sockets:
             continue
 
-        # Don't yank a path out from under a drone that's already flying it — that would
-        # force aegis_client to re-send /send/navigateTrajectory, spawning a second control
-        # loop on the Android side alongside the one already running.
-        existing = reg.get(drone_id) or {}
-        if existing.get("path") and existing.get("mission_active"):
-            continue
-
         fmt_waypoints = [{"lat": pt[0], "lon": pt[1], "alt": 30.0} for pt in waypoints]
         if not fmt_waypoints:
-            continue  # Sometimes drone gets blocked out from grid, skip assigning.
-
+            continue
+        
+        # Only update and send if the path has actually changed to avoid redundant resets
+        existing_drone = reg.get(drone_id) or {}
+        if existing_drone.get("path") == fmt_waypoints:
+            continue
+            
         reg.add_or_update(drone_id, {"path": fmt_waypoints})
 
         asyncio.create_task(swarm_sockets[drone_id].send_json({

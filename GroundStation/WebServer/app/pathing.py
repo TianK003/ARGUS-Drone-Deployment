@@ -98,7 +98,7 @@ def build_exclusive_grid(drones_local: List[DroneLocal], spacing: int) -> Grid:
         x_max = max(x_max, d.x + d.r)
         y_max = max(y_max, d.y + d.r)
 
-    cell = max(10.0, float(spacing * 0.75))
+    cell = max(5.0, float(spacing * 0.5))
     x_min -= cell
     y_min -= cell
     x_max += cell
@@ -119,9 +119,36 @@ def build_exclusive_grid(drones_local: List[DroneLocal], spacing: int) -> Grid:
             if owner_id is not None:
                 owned_count += 1
 
-    path_cache.clear()
+    # --- Grid Erosion Pass ---
+    # To prevent overlapping paths near boundaries, we clear any cell that
+    # touches (8-connectivity) a cell owned by a different drone.
+    # This creates a "no-man's-land" buffer between zones.
+    eroded_owner = [row[:] for row in owner]
+    final_count = 0
     
-    return Grid(owner, x_min, y_min, cell, width, height, owned_count * cell * cell)
+    for gy in range(height):
+        for gx in range(width):
+            oid = owner[gy][gx]
+            if oid is None:
+                continue
+            
+            # Check 4-neighbors (smaller gap than 8-neighbors)
+            is_boundary = False
+            for dx, dy in [(1,0), (-1,0), (0,1), (0,-1)]:
+                nx, ny = gx + dx, gy + dy
+                if 0 <= nx < width and 0 <= ny < height:
+                    noid = owner[ny][nx]
+                    if noid is not None and noid != oid:
+                        is_boundary = True
+                        break
+            
+            if is_boundary:
+                eroded_owner[gy][gx] = None
+            else:
+                final_count += 1
+
+    path_cache.clear()
+    return Grid(eroded_owner, x_min, y_min, cell, width, height, final_count * cell * cell)
 
 def get_exclusive_owner(x: float, y: float, drones_local: List[DroneLocal]) -> Optional[str]:
     best = None
