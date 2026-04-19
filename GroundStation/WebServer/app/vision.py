@@ -15,16 +15,17 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 MODEL_PATH = BASE_DIR / "models" / "sam3.1_multiplex.pt"
 
 class VisionDaemon:
-    def __init__(self, registry):
+    def __init__(self, registry, device: str = "0"):
         self.registry = registry
+        self.device = device
         self.master_prompt = ""
         self._lock = threading.Lock()
-        
+
         self.running = False
         self._thread = None
-        
+
         # Load weights lazily inside the thread to avoid blocking FastAPI boot
-        self.predictor = None 
+        self.predictor = None
         
     def start(self):
         if self.running: return
@@ -61,13 +62,13 @@ class VisionDaemon:
             if not MODEL_PATH.parent.exists():
                 MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
                 
-            log.info(f"VisionDaemon: Initializing SAM 3.1 on GPU from {MODEL_PATH}")
+            log.info(f"VisionDaemon: Initializing SAM 3.1 on device={self.device} from {MODEL_PATH}")
             overrides = dict(
                 conf=0.25,
                 task="segment",
                 mode="predict",
                 model=str(MODEL_PATH),
-                device="0",  # Target the RTX 3070 Ti
+                device=self.device,
                 verbose=False
             )
             self.predictor = SAM3SemanticPredictor(overrides=overrides)
@@ -124,20 +125,42 @@ class VisionDaemon:
                     self.predictor.set_image(frame)
                     results = self.predictor(text=[current_prompt])
                     
-                    # Determine detection trigger accurately 
+                    # Determine detection trigger accurately
                     if results and len(results) > 0:
                         # Depending on ultralytics version, it might be in `masks` or `boxes`
                         r = results[0]
                         if (hasattr(r, 'masks') and r.masks is not None and len(r.masks) > 0) or \
                            (hasattr(r, 'boxes') and r.boxes is not None and len(r.boxes) > 0):
                             print(f"\n[SAM THREAT ALERT] POSITIVE IDENTIFICATION -> '{current_prompt}' identified physically via {drone_id}!\n")
-                            # Emit detection payload to UI via WebSocket
-                            self.registry.push_alert({
-                                "droneId": drone_id,
-                                "text": current_prompt,
-                                "ts": int(time.time() * 1000),
-                                "cls": "alert"
-                            })
+
+                            # Compose an annotated JPEG: the BGR frame with SAM mask + boxes drawn on top.
+                            jpeg_bytes = None
+                            try:
+                                annotated = r.plot() if hasattr(r, 'plot') else frame
+                                ok, buf = cv2.imencode('.jpg', annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+                                if ok:
+                                    jpeg_bytes = buf.tobytes()
+                            except Exception as enc_exc:
+                                log.warning(f"VisionDaemon: failed to encode annotated frame for {drone_id}: {enc_exc}")
+
+                            # Snapshot GPS at detection time; fall back through telemetry → homeLocation.
+                            loc = (drone_raw.get("telemetry") or {}).get("location") or {}
+                            lat = loc.get("latitude", loc.get("lat"))
+                            lng = loc.get("longitude", loc.get("lon"))
+                            if lat is None or lng is None:
+                                home = drone_raw.get("homeLocation") or {}
+                                lat = home.get("latitude", home.get("lat", 0.0))
+                                lng = home.get("longitude", home.get("lon", 0.0))
+
+                            self.registry.record_detection(
+                                drone_id=drone_id,
+                                drone_label=drone_raw.get("label", drone_id),
+                                prompt=current_prompt,
+                                ts_ms=int(time.time() * 1000),
+                                lat=float(lat),
+                                lng=float(lng),
+                                jpeg_bytes=jpeg_bytes,
+                            )
                             # Add a brief pause to stop console spamming during lock
                             time.sleep(1.0)
                             

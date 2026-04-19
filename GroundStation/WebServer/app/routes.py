@@ -84,6 +84,19 @@ def set_master_prompt(payload: PromptRequest, request: Request):
         daemon.set_prompt(payload.prompt)
     return {"status": "ok"}
 
+@router.get("/api/detections")
+def list_detections(request: Request):
+    """Full detection history (metadata only). Image bodies at /api/detections/{id}/image.jpg."""
+    return {"detections": _registry(request).list_detections()}
+
+@router.get("/api/detections/{det_id}/image.jpg")
+def get_detection_image(det_id: str, request: Request):
+    """Annotated JPEG for a detection. 404 once evicted (latest 50 are retained)."""
+    img = _registry(request).get_detection_image(det_id)
+    if img is None:
+        raise HTTPException(status_code=404, detail="image evicted or unknown detection")
+    return Response(content=img, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
 swarm_sockets: Dict[str, WebSocket] = {}
 
 def broadcast_swarm_paths(app_state: Any):

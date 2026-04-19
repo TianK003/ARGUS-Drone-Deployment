@@ -7,6 +7,8 @@ from __future__ import annotations
 import logging
 import threading
 import random
+import uuid
+from collections import OrderedDict
 from typing import Dict, Optional, List
 
 log = logging.getLogger(__name__)
@@ -14,11 +16,16 @@ log = logging.getLogger(__name__)
 # vibrant colors
 PALETTE = ['#00E676', '#58a6ff', '#f778ba', '#d29922', '#a371f7', '#ff7b72', '#39c5cf', '#e3b341', '#bc8cff', '#FF4081']
 
+DETECTION_IMAGE_CAP = 50
+DETECTION_META_CAP = 1000
+
 class DroneRegistry:
     def __init__(self):
         self._lock = threading.RLock()
         self._drones: Dict[str, dict] = {}
         self._alerts: List[dict] = []
+        self._detections: List[dict] = []
+        self._detection_images: "OrderedDict[str, bytes]" = OrderedDict()
 
     def push_alert(self, alert: dict):
         with self._lock:
@@ -31,6 +38,55 @@ class DroneRegistry:
             res = self._alerts[:]
             self._alerts.clear()
             return res
+
+    def record_detection(
+        self,
+        drone_id: str,
+        drone_label: str,
+        prompt: str,
+        ts_ms: int,
+        lat: float,
+        lng: float,
+        jpeg_bytes: Optional[bytes],
+    ) -> dict:
+        det_id = f"det-{uuid.uuid4().hex[:8]}"
+        payload = {
+            "id": det_id,
+            "droneId": drone_id,
+            "droneLabel": drone_label,
+            "prompt": prompt,
+            "ts": ts_ms,
+            "lat": lat,
+            "lng": lng,
+            "has_image": bool(jpeg_bytes),
+        }
+        with self._lock:
+            self._detections.append(payload)
+
+            if jpeg_bytes:
+                self._detection_images[det_id] = jpeg_bytes
+                while len(self._detection_images) > DETECTION_IMAGE_CAP:
+                    evicted_id, _ = self._detection_images.popitem(last=False)
+                    for entry in self._detections:
+                        if entry["id"] == evicted_id:
+                            entry["has_image"] = False
+                            break
+
+            # Defensive: cap total metadata to avoid OOM on runaway prompts.
+            while len(self._detections) > DETECTION_META_CAP:
+                old = self._detections.pop(0)
+                self._detection_images.pop(old["id"], None)
+
+            self._alerts.append(payload)
+        return payload
+
+    def list_detections(self) -> List[dict]:
+        with self._lock:
+            return [d.copy() for d in self._detections]
+
+    def get_detection_image(self, det_id: str) -> Optional[bytes]:
+        with self._lock:
+            return self._detection_images.get(det_id)
 
     def add_or_update(self, drone_id: str, data: dict) -> dict:
         with self._lock:

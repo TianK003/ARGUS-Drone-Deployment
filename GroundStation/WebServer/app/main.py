@@ -17,7 +17,7 @@ from .vision import VisionDaemon
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
-def create_app(registry: DroneRegistry) -> FastAPI:
+def create_app(registry: DroneRegistry, device: str = "0") -> FastAPI:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -25,7 +25,7 @@ def create_app(registry: DroneRegistry) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        daemon = VisionDaemon(registry)
+        daemon = VisionDaemon(registry, device=device)
         daemon.start()
         app.state.vision_daemon = daemon
         try:
