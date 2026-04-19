@@ -1,4 +1,4 @@
-"""FastAPI app factory for the WildBridge web backend."""
+"""FastAPI app factory for the ARGUS Hub (multi-drone ground station)."""
 
 from __future__ import annotations
 
@@ -6,17 +6,22 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from .registry import DroneRegistry
 from .routes import router
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 
-def create_app(drone_client, video_broadcaster=None) -> FastAPI:
+def create_app(
+    registry: DroneRegistry,
+    defaults: dict | None = None,
+    plans_dir: Path | None = None,
+) -> FastAPI:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -24,25 +29,24 @@ def create_app(drone_client, video_broadcaster=None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        if video_broadcaster is not None:
-            video_broadcaster.start()
         try:
             yield
         finally:
-            if video_broadcaster is not None:
-                video_broadcaster.stop()
+            registry.shutdown()
 
     app = FastAPI(
-        title="WildBridge Web Backend",
-        version="0.2.0",
+        title="ARGUS Hub",
+        version="0.3.0",
         description=(
-            "Bridges a browser UI to the WildBridge Android app's HTTP API on the DJI RC. "
-            "Virtual-stick control + live MJPEG video."
+            "Multi-drone ground station. Serves a Leaflet swarm dashboard plus "
+            "per-drone virtual-stick control and MJPEG video, all bridged to the "
+            "WildBridge Android app's HTTP/TCP/RTSP contract."
         ),
         lifespan=lifespan,
     )
-    app.state.drone_client = drone_client
-    app.state.video = video_broadcaster
+    app.state.registry = registry
+    app.state.defaults = defaults or {}
+    app.state.plans_dir = plans_dir or (STATIC_DIR.parent / "plans")
 
     app.add_middleware(
         CORSMiddleware,
@@ -55,11 +59,24 @@ def create_app(drone_client, video_broadcaster=None) -> FastAPI:
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.get("/", include_in_schema=False)
-    def index():
-        return FileResponse(STATIC_DIR / "index.html")
+    def dashboard():
+        return FileResponse(STATIC_DIR / "dashboard.html")
+
+    @app.get("/drone/{drone_id}", include_in_schema=False)
+    def drone_control(drone_id: str, request: Request):
+        if request.app.state.registry.get(drone_id) is None:
+            raise HTTPException(status_code=404, detail=f"unknown drone: {drone_id}")
+        # Inject DRONE_ID into the single-drone UI without a template engine.
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        injected = (
+            f"<script>window.DRONE_ID = {drone_id!r};</script>"
+        )
+        html = html.replace("</head>", injected + "\n</head>", 1)
+        return HTMLResponse(html)
 
     @app.get("/video", include_in_schema=False)
     def video_standalone():
+        # Kept for backwards compatibility; user is expected to pass ?drone=ID.
         return FileResponse(STATIC_DIR / "video.html")
 
     return app

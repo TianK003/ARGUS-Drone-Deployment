@@ -1,12 +1,20 @@
 (function () {
     'use strict';
 
+    const DRONE_ID = window.DRONE_ID;
+    if (!DRONE_ID) {
+        console.error('ARGUS: window.DRONE_ID not set; did the server inject it?');
+    }
+    const API = (path) => `/api/drones/${encodeURIComponent(DRONE_ID)}${path}`;
+
     const logEl = document.getElementById('log');
     const modePill = document.getElementById('mode-pill');
     const wsPill = document.getElementById('ws-pill');
     const vsPill = document.getElementById('vs-pill');
     const banner = document.getElementById('banner');
     const sticksEl = document.getElementById('sticks');
+    const droneBadge = document.getElementById('drone-badge');
+    if (droneBadge) droneBadge.textContent = DRONE_ID || '—';
 
     function escapeHtml(s) {
         return String(s).replace(/[&<>"']/g, c =>
@@ -27,11 +35,13 @@
     // ── Health + mode ───────────────────────────────────────────────
     async function loadHealth() {
         try {
-            const res = await fetch('/api/health');
+            const res = await fetch(API(''));
+            if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
             const d = await res.json();
-            modePill.textContent = 'MODE: ' + d.mode.toUpperCase();
-            modePill.dataset.state = d.mode;
-            log('health', `mode=${d.mode}  rc=${d.rc_ip}  max_stick=${d.max_stick}`);
+            const mode = d.mock ? 'mock' : 'live';
+            modePill.textContent = 'MODE: ' + mode.toUpperCase();
+            modePill.dataset.state = mode;
+            log('health', `drone=${d.id}  rc=${d.rc_ip}  mock=${d.mock}`);
         } catch (e) {
             log('health', 'failed: ' + e.message, true);
         }
@@ -71,11 +81,11 @@
         });
     }
 
-    wire('btn-enable', '/api/virtual-stick/enable', 'enable VS', () => setVirtualStickOn(true));
-    wire('btn-disable', '/api/virtual-stick/disable', 'DISABLE', () => setVirtualStickOn(false));
-    wire('btn-takeoff', '/api/takeoff', 'takeoff');
-    wire('btn-land', '/api/land', 'land');
-    wire('btn-rth', '/api/rth', 'RTH');
+    wire('btn-enable', API('/virtual-stick/enable'), 'enable VS', () => setVirtualStickOn(true));
+    wire('btn-disable', API('/virtual-stick/disable'), 'DISABLE', () => setVirtualStickOn(false));
+    wire('btn-takeoff', API('/takeoff'), 'takeoff');
+    wire('btn-land', API('/land'), 'land');
+    wire('btn-rth', API('/rth'), 'RTH');
 
     document.getElementById('btn-clear-log').addEventListener('click', () => {
         logEl.innerHTML = '';
@@ -87,7 +97,7 @@
 
     function wsConnect() {
         const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-        ws = new WebSocket(`${proto}://${location.host}/ws/stick`);
+        ws = new WebSocket(`${proto}://${location.host}/ws/drones/${encodeURIComponent(DRONE_ID)}/stick`);
 
         ws.addEventListener('open', () => {
             wsPill.textContent = 'WS: connected';
@@ -257,6 +267,11 @@
     loadHealth();
     wsConnect();
 
+    const linkNewTab = document.getElementById('link-video-new-tab');
+    if (linkNewTab && DRONE_ID) {
+        linkNewTab.href = `/video?drone=${encodeURIComponent(DRONE_ID)}`;
+    }
+
     // ── Tab switching ───────────────────────────────────────────────
     const tabs = document.querySelectorAll('.tab');
     const panels = document.querySelectorAll('.tab-panel');
@@ -287,19 +302,19 @@
             videoMeta.textContent = 'stream error — check phone app';
             videoMeta.className = 'video-meta is-warn';
         });
-        videoImg.src = '/api/video.mjpg?t=' + Date.now();
+        videoImg.src = API('/video.mjpg') + '?t=' + Date.now();
     }
 
     document.getElementById('btn-video-reload').addEventListener('click', () => {
         videoImg.classList.remove('is-loaded');
         videoPlaceholder.classList.remove('is-hidden');
         videoImg.src = '';
-        setTimeout(() => { videoImg.src = '/api/video.mjpg?t=' + Date.now(); }, 50);
+        setTimeout(() => { videoImg.src = API('/video.mjpg') + '?t=' + Date.now(); }, 50);
     });
 
     async function pollVideoStatus() {
         try {
-            const r = await fetch('/api/video/status');
+            const r = await fetch(API('/video/status'));
             if (!r.ok) throw new Error(r.status);
             const s = await r.json();
             if (s.connected) {

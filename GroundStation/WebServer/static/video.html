@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WildBridge — Live Feed</title>
+    <title>ARGUS — Live Feed</title>
     <style>
         html, body {
             margin: 0;
@@ -67,14 +67,22 @@
             const meta = document.getElementById('meta');
             const placeholder = document.getElementById('placeholder');
 
+            const droneId = new URLSearchParams(location.search).get('drone');
+            if (!droneId) {
+                meta.textContent = 'missing ?drone=ID';
+                meta.className = 'is-warn';
+                return;
+            }
+            const base = `/api/drones/${encodeURIComponent(droneId)}`;
+
             feed.addEventListener('load', () => { placeholder.style.display = 'none'; }, { once: true });
 
             // MJPEG stream; browser decodes the multipart response automatically.
-            feed.src = '/api/video.mjpg?t=' + Date.now();
+            feed.src = base + '/video.mjpg?t=' + Date.now();
 
             async function pollStatus() {
                 try {
-                    const r = await fetch('/api/video/status');
+                    const r = await fetch(base + '/video/status');
                     const s = await r.json();
                     if (s.connected) {
                         meta.textContent =

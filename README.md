@@ -200,21 +200,25 @@ waypoints = "49.306,4.593,20; 49.307,4.594,25; 49.308,4.595,20"
 requests.post(f"http://{rc_ip}:8080/send/navigateTrajectoryDJINative", data=waypoints)
 ```
 
-## Web Ground Station (browser UI)
+## Web Ground Station (ARGUS Hub)
 
-`GroundStation/WebServer/` is a FastAPI backend + vanilla-JS frontend that lets an operator fly the drone from any browser on the LAN. Two tabs:
+`GroundStation/WebServer/` is a FastAPI backend + vanilla-JS frontend that lets an operator fly **a whole fleet** of drones from any browser on the LAN. Three surfaces:
 
-- **Control** — on-screen joysticks (yaw/throttle + roll/pitch), **Takeoff / Land / RTH / Enable Virtual Stick / hard-stop** buttons, live activity log. Inputs are streamed to the backend over a WebSocket at up to 20 Hz and forwarded to the RC's `/send/stick`. A 500 ms deadman sends a zeroed stick command if the socket goes silent or the browser closes mid-drag.
-- **Video** — live feed from the drone. The backend opens the RC's RTSP stream with OpenCV, re-encodes frames to JPEG, and serves them as a `multipart/x-mixed-replace` MJPEG stream. The browser renders it in a plain `<img>` — no special plugins, works in any modern browser. A standalone `/video` page is available for popping the feed onto a second monitor.
+- **`/` — Leaflet multi-drone dashboard.** Two modes:
+  - **Live**: markers come from the drone registry (`GET /api/drones` + `/ws/drones` at 1 Hz). Each row has a `Control ↗` link that opens the single-drone UI. A `+ Register drone` dialog adds an RC at runtime; the registry persists to `drones.json`.
+  - **Planning**: a Boustrophedon (lawnmower) patrol-path planner — click to place drones, drag to relocate, adjust reach + stripe spacing, then `Save plan` to persist the computed paths under `plans/`.
+- **`/drone/{id}` — single-drone Control tab + Video tab.** On-screen joysticks (yaw/throttle + roll/pitch), **Takeoff / Land / RTH / Enable Virtual Stick / hard-stop** buttons, activity log, MJPEG video tab. Inputs stream over a WebSocket (`/ws/drones/{id}/stick`) at up to 20 Hz and are forwarded to the RC's `/send/stick`. A 500 ms deadman sends a zeroed stick command if the socket goes silent.
+- **`/video?drone={id}` — standalone full-screen MJPEG viewer** for popping the feed onto a second monitor.
 
 ### Architecture
 
 ```
-browser ──HTTP + WebSocket──► FastAPI :8000 ──HTTP  :8080──► RC / phone ──► drone
-                                            ──RTSP :8554──► RC / phone
+browser ──HTTP + WebSocket──► ARGUS Hub (:8000) ──HTTP  :8080──► RC / phone ──► drone
+                                                 ──TCP   :8081──► RC / phone (telemetry)
+                                                 ──RTSP  :8554──► RC / phone (video)
 ```
 
-Nothing in the DJI RC app needs to change — the webapp only uses the public HTTP/RTSP endpoints already exposed by WildBridge.
+One ARGUS Hub ↔ N drones. Nothing in the DJI RC app needs to change — the webapp only uses the public HTTP/TCP/RTSP endpoints already exposed by WildBridge.
 
 ### Requirements
 
@@ -243,49 +247,73 @@ Dependencies (pulled by `requirements.txt`):
 ### Run
 
 ```bash
-# Dev mode — no drone needed. Mock drone logs commands; mock video renders a test pattern.
+# Dev mode — no drone needed. Seeds one mock drone at Ljubljana; mock video renders a test pattern.
 python -m app --mock
 
-# Live mode — talk to a real RC/phone. Use the phone's (or RC Pro's) LAN IP.
-python -m app --rc-ip 192.168.1.137
+# Live mode — reads drones.json from WebServer/ (copy drones.example.json to drones.json).
+python -m app
 
-# Recommended for a first real flight: cap stick inputs tighter than the default 0.3.
-python -m app --rc-ip 192.168.1.137 --max-stick 0.15
+# Point at a different registry path:
+python -m app --drones-config /path/to/drones.json
 
-# Skip the video broadcaster if another process is already consuming the RTSP feed.
-python -m app --rc-ip 192.168.1.137 --no-video
+# Recommended cap for a first real flight: tighter than the default 0.3.
+python -m app --max-stick 0.15
 
-# Expose on the LAN instead of localhost-only (lets a phone / tablet also open the UI).
-python -m app --rc-ip 192.168.1.137 --host 0.0.0.0
+# Skip the video broadcaster for every drone (useful if another process owns the RTSP feed).
+python -m app --no-video
+
+# Expose on the LAN instead of localhost-only (so a phone / tablet can open the UI).
+python -m app --host 0.0.0.0
 ```
 
-Then open **<http://localhost:8000>** in a browser.
+Then open **<http://localhost:8000>** in a browser. The dashboard lists every drone in the registry, with a `Control ↗` link to the per-drone UI.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--rc-ip IP` | — | RC/phone IP on the LAN. Required unless `--mock`. |
-| `--mock` | off | Log commands to stdout instead of sending; generate a test-pattern video. |
+| `--mock` | off | Force all drones to mock mode; seed a Ljubljana mock drone if `drones.json` is empty. |
+| `--drones-config PATH` | `WebServer/drones.json` | Registry file (JSON). Persisted on every add/remove via the UI. |
 | `--host HOST` | `127.0.0.1` | Bind address. Use `0.0.0.0` to expose on the LAN. |
 | `--port PORT` | `8000` | Web-server port. |
 | `--max-stick F` | `0.3` | Saturation cap in `[0, 1]` applied to every stick axis before forwarding. |
-| `--no-video` | off | Disable the RTSP broadcaster; `/api/video.*` endpoints return 503. |
+| `--no-video` | off | Disable the RTSP broadcaster for all drones; `/api/drones/{id}/video/*` returns 503. |
+
+**`drones.json` schema** — one entry per RC. Copy `drones.example.json` as a starting point:
+
+```json
+{
+  "drones": [
+    {"id": "rc-1", "label": "RC Pro", "rc_ip": "192.168.1.100",
+     "home_lat": 46.0569, "home_lng": 14.5058, "reach_m": 800,
+     "mock": false, "enable_video": true}
+  ]
+}
+```
 
 ### Endpoints exposed by the web backend
 
+All control/video routes are namespaced per drone.
+
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/` | Control + Video tabs (main UI) |
-| GET | `/video` | Standalone full-viewport video page (for popping out to a second monitor) |
+| GET | `/` | Leaflet multi-drone dashboard |
+| GET | `/drone/{id}` | Single-drone Control + Video UI |
+| GET | `/video?drone={id}` | Standalone full-viewport video |
 | GET | `/docs` | Interactive OpenAPI docs (FastAPI default) |
-| GET | `/api/health` | `{mode, rc_ip, max_stick, recent_calls}` |
-| POST | `/api/virtual-stick/enable` | Proxies RC `/send/enableVirtualStick` |
-| POST | `/api/virtual-stick/disable` | Proxies RC `/send/abortMission` (hard-stop) |
-| POST | `/api/stick` | Body `{leftX, leftY, rightX, rightY}` → RC `/send/stick` |
-| POST | `/api/takeoff` / `/api/land` / `/api/rth` | Proxy the matching RC command |
-| WS | `/ws/stick` | Stream stick values; backend debounces, rate-limits, deadman |
-| GET | `/api/video/status` | `{connected, fps, width, height, last_frame_age_s, mode}` |
-| GET | `/api/video/snapshot.jpg` | Single most-recent JPEG frame |
-| GET | `/api/video.mjpg` | `multipart/x-mixed-replace` MJPEG stream |
+| GET | `/api/health` | `{ok, drones: [id, …]}` |
+| GET | `/api/drones` | List — each entry includes telemetry snapshot for the map |
+| POST | `/api/drones` | Register a drone: body `{id, rc_ip, label?, home_lat?, home_lng?, reach_m?, mock?, enable_video?}` |
+| GET | `/api/drones/{id}` | Single-drone snapshot |
+| DELETE | `/api/drones/{id}` | Remove from registry (also tears down its video broadcaster) |
+| POST | `/api/drones/{id}/virtual-stick/enable` | Proxies RC `/send/enableVirtualStick` |
+| POST | `/api/drones/{id}/virtual-stick/disable` | Proxies RC `/send/abortMission` (hard-stop) |
+| POST | `/api/drones/{id}/stick` | Body `{leftX, leftY, rightX, rightY}` → RC `/send/stick` |
+| POST | `/api/drones/{id}/takeoff` · `/land` · `/rth` | Matching RC command |
+| WS | `/ws/drones/{id}/stick` | Stream stick values; 20 Hz forward cap + 500 ms deadman |
+| WS | `/ws/drones` | 1 Hz fan-out of `{ts, drones: [snapshot, …]}` — consumed by the dashboard |
+| GET | `/api/drones/{id}/video/status` | `{connected, fps, width, height, last_frame_age_s, mode}` |
+| GET | `/api/drones/{id}/video/snapshot.jpg` | Single most-recent JPEG |
+| GET | `/api/drones/{id}/video.mjpg` | `multipart/x-mixed-replace` MJPEG stream |
+| POST | `/api/plans` | Persist a Boustrophedon plan as JSON under `plans/` |
 
 ### RTSP smoke test (without the webapp)
 

@@ -3,15 +3,15 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>WildBridge Control</title>
+    <title>ARGUS — Drone Control</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <header class="topbar">
         <div class="brand">
-            <span class="logo">◆</span>
-            <span class="title">WildBridge</span>
-            <span class="version">v0.2</span>
+            <a href="/" class="logo" title="Back to ARGUS dashboard" style="text-decoration:none;color:inherit">◆</a>
+            <a href="/" class="title" style="text-decoration:none;color:inherit">ARGUS</a>
+            <span class="version" id="drone-badge">—</span>
         </div>
         <div class="status-group">
             <span class="status-pill" id="mode-pill" data-state="unknown">MODE: —</span>
@@ -83,7 +83,7 @@
             <div class="video-bar">
                 <div class="video-meta" id="video-meta">connecting…</div>
                 <div class="video-actions">
-                    <a class="btn btn--small" href="/video" target="_blank" rel="noopener">Open in new tab ↗</a>
+                    <a class="btn btn--small" id="link-video-new-tab" href="/video" target="_blank" rel="noopener">Open in new tab ↗</a>
                     <button id="btn-video-reload" class="btn btn--small">Reload stream</button>
                 </div>
             </div>
@@ -98,7 +98,8 @@
         </section>
 
         <footer class="footnote">
-            Backend bridges browser → RC HTTP :8080 / RTSP :8554. No auth. Trusted LAN only.
+            ARGUS Hub bridges browser → RC HTTP :8080 / RTSP :8554. No auth. Trusted LAN only.
+            <a href="/" style="margin-left:8px;color:inherit">← Back to dashboard</a>
         </footer>
     </main>
 

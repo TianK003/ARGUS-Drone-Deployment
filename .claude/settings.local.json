@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C C:/Users/admin/Downloads/ARGUS-Drone-Deployment/ submodule status)",
+      "Bash(git -C C:/Users/admin/Downloads/ARGUS-Drone-Deployment/ ls-tree HEAD ARGUS-Drone-Middleware)",
+      "Bash(git -C C:/Users/admin/Downloads/ARGUS-Drone-Deployment/ log --oneline -n 10)",
+      "Bash(git -C C:/Users/admin/Downloads/ARGUS-Drone-Deployment/ status)",
+      "Bash(grep -E '\\\\.\\(css|js|html\\)$')"
+    ]
+  }
+}

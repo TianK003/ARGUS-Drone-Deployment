@@ -1,0 +1,24 @@
+{
+  "drones": [
+    {
+      "id": "rc-1",
+      "label": "RC Pro (west)",
+      "rc_ip": "192.168.1.100",
+      "home_lat": 46.0569,
+      "home_lng": 14.5058,
+      "reach_m": 800,
+      "mock": false,
+      "enable_video": true
+    },
+    {
+      "id": "rc-2",
+      "label": "RC Plus (east)",
+      "rc_ip": "192.168.1.101",
+      "home_lat": 46.0580,
+      "home_lng": 14.5120,
+      "reach_m": 600,
+      "mock": false,
+      "enable_video": true
+    }
+  ]
+}

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 WildBridge (a.k.a. ARGUS-Drone-Deployment in this fork) is a DJI ground-station system. The **Android app** in `WildBridgeApp/` is deployed onto a DJI RC controller (RC Pro / RC Plus / RC-N3) and, while the "Virtual Stick" page is open, exposes three LAN-facing services that let ground-station code control the drone without touching physical sticks: **HTTP on 8080** (commands), **TCP on 8081** (20 Hz JSON telemetry), **RTSP on 8554** (video).
 
-This fork adds a browser-facing webapp (`GroundStation/WebServer/`) so an operator can fly the drone from a web UI instead of the physical RC.
+This fork adds the **ARGUS Hub** (`GroundStation/WebServer/`) — a multi-drone FastAPI webapp with a Leaflet dashboard for situational awareness and per-drone virtual-stick / video subpages. Operators register drones in the map UI and fly any one of them from the browser. `docs/ARCHITECTURE.md` documents the full swarm vision (Boustrophedon patrol paths + Meta SAM 3 detection), most of which is still on the roadmap.
 
 Upstream paper: Rolland et al., *WildBridge* (RiTA 2025). EU Horizon Europe funded (WildDrone project).
 
@@ -19,7 +19,8 @@ Upstream paper: Rolland et al., *WildBridge* (RiTA 2025). EU Horizon Europe fund
   - Before editing any Kotlin, confirm which tree is live. Upstream appears to author changes in both `android-sdk-v5-as` and `android-sdk-v5-sample/src/main/java/dji/sampleV5/aircraft/`.
 - `GroundStation/Python/djiInterface.py` — **canonical HTTP + TCP client**. Wraps every command and telemetry field the RC exposes. Reuse it; do not reimplement the protocol.
 - `GroundStation/ROS/` — ROS 2 Humble wrapper that publishes telemetry as topics and exposes commands as services.
-- `GroundStation/WebServer/` — FastAPI + vanilla-JS webapp (added in this fork). Browser-facing: virtual-stick control over a WebSocket + live MJPEG video re-streamed from the RC's RTSP feed. See `GroundStation/WebServer/README.md`.
+- `GroundStation/WebServer/` — ARGUS Hub (added in this fork). FastAPI on `:8000` with three surfaces: `/` Leaflet multi-drone dashboard, `/drone/{id}` the single-drone control UI (joysticks + MJPEG re-stream), `/video?drone={id}` the standalone video viewer. Drone registry persists to `drones.json`. See `GroundStation/WebServer/README.md` and `docs/ARCHITECTURE.md`.
+- `docs/` — `ARCHITECTURE.md` (system + swarm roadmap) and `FILE_MAP.md` (one-line file catalogue).
 
 ## The network contract (load-bearing)
 
@@ -47,23 +48,48 @@ pip install -r GroundStation/Python/requirements.txt
 python GroundStation/Python/djiInterface.py <RC_IP>   # dumps live telemetry
 ```
 
-### Web backend (this fork)
+### Web backend — ARGUS Hub (this fork)
 ```bash
 cd GroundStation/WebServer
 python -m venv .venv && source .venv/bin/activate   # PowerShell: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python -m app --mock                    # dev; generated test-pattern video
-python -m app --rc-ip 192.168.1.100     # talk to a real RC (phone or RC Pro)
-python -m app --rc-ip ... --no-video    # skip the RTSP broadcaster entirely
+
+python -m app --mock                                  # dev; seeds one mock drone at Ljubljana
+python -m app                                         # live; reads drones.json from WebServer/
+python -m app --drones-config /path/to/drones.json    # custom registry location
+python -m app --no-video                              # skip RTSP for all drones
 ```
-Serves on `http://localhost:8000` with two tabs: **Control** (on-screen joysticks, takeoff/land/RTH/disable) and **Video** (MJPEG re-stream). Standalone video page at `/video` for popping onto a second monitor.
+Serves on `http://localhost:8000`. The landing page is the **Leaflet multi-drone dashboard** (`/`). It has two modes:
+- **Live** (default): markers are populated from `GET /api/drones` and `/ws/drones` (1 Hz fan-out). Each drone has a `Control ↗` link that opens `/drone/{id}`. A `+ Register drone` dialog POSTs to `/api/drones` to add a new RC at runtime; registry is persisted to `drones.json`.
+- **Planning**: restores the Boustrophedon patrol-path planner (click to place drones, drag, reach slider, stripe spacing, save plan via `POST /api/plans`).
+
+`/drone/{id}` is the single-drone control UI (joysticks + takeoff/land/RTH + MJPEG video tab) — this is the same UI that existed pre-merge, now namespaced per drone. `/video?drone={id}` is the standalone video viewer for a second monitor.
 
 Architecture in one diagram:
 ```
-browser ──HTTP/WS──► FastAPI (:8000) ──HTTP──► RC/phone (:8080)  commands
-                                    ──RTSP──► RC/phone (:8554)   video (decoded, re-encoded to MJPEG, fanned out)
+browser ──HTTP/WS──► ARGUS Hub (:8000) ──HTTP──► RC/phone (:8080)  commands
+                                        ──TCP──► RC/phone (:8081)  telemetry
+                                        ──RTSP─► RC/phone (:8554)  video (decoded, re-encoded to MJPEG, fanned out)
 ```
-Core Python modules under `app/`: `drone_client.py` (Live/Mock, wraps `djiInterface.DJIInterface`), `routes.py` (REST + `/ws/stick` with 500 ms deadman + 20 Hz forward cap, plus `/api/video.mjpg` multipart), `video.py` (Live/Mock broadcaster, OpenCV-driven background thread, single latest-frame slot), `main.py` (app factory + `lifespan` hook), `__main__.py` (argparse). Helper script: `tools/check_video.py` for an RTSP smoke test without the webapp.
+
+Core Python modules under `app/`:
+- `registry.py` — `DroneRegistry`: thread-safe add/remove/list + JSON persistence, owns one `LiveDroneClient` + `LiveVideoBroadcaster` per drone.
+- `routes.py` — per-drone routes namespaced under `/api/drones/{id}/...` (virtual-stick enable/disable, `/takeoff`, `/land`, `/rth`, `/stick`, `/video/status|snapshot.jpg|video.mjpg`). Stick WebSocket is `/ws/drones/{id}/stick` with the same 500 ms deadman + 20 Hz forward cap as before. `/ws/drones` fan-outs `{id → snapshot}` for the dashboard.
+- `drone_client.py` — `LiveDroneClient` wraps `djiInterface.DJIInterface`; `MockDroneClient` is a stdout stub.
+- `video.py` — `LiveVideoBroadcaster` (RTSP → OpenCV → JPEG with exponential-backoff reconnect) and `MockVideoBroadcaster`.
+- `main.py` — FastAPI factory. `/drone/{id}` injects `<script>window.DRONE_ID = "..."</script>` into `index.html` so the client JS knows which drone it's controlling.
+- `__main__.py` — argparse.
+
+Helper scripts: `tools/check_video.py` (RTSP smoke test), `tools/sam3_webcam.py` (reference SAM 3 / Falcon inference on a webcam, not wired into the server — see roadmap below).
+
+### ARGUS swarm roadmap
+
+Beyond what's live today, three layers from `docs/ARCHITECTURE.md` are still open:
+- **Server-side path executor** — the dashboard already computes Boustrophedon paths client-side and persists them via `POST /api/plans`; next step is a worker that reads a plan and feeds waypoints to each drone via `/send/navigateTrajectory`.
+- **Meta SAM 3 detection loop** — centralized round-robin inference across all connected drones, driven by an admin prompt, with GPS pins on the map for hits. Reference implementation lives in `tools/sam3_webcam.py`.
+- **WebRTC / GStreamer video transport** — drop-in replacement for `LiveVideoBroadcaster` to get sub-500 ms latency for first-person piloting.
+
+See `docs/ARCHITECTURE.md` for the full plan.
 
 ### ROS 2 ground station
 ```bash
@@ -83,7 +109,8 @@ The DJI Mobile SDK provides a built-in aircraft simulator (`SimulatorVM.kt` on t
 - Endpoint bodies are **plain CSV strings, not JSON** — a common mistake when writing new clients.
 - Waypoint commands use **absolute altitude in meters**, WGS84 decimal lat/lon, yaw in compass degrees.
 - The WildBridge phone/RC app's HTTP, TCP and RTSP servers only run while the **"Virtual Stick"** page is foregrounded. Any feature in the web backend (video feed included) dies silently if the page backgrounds or the screen locks. For a phone, disable battery-save for the app and turn on "Stay awake while charging" in Developer Options.
-- The web backend's `LiveVideoBroadcaster` auto-reconnects with exponential backoff (1s → 10s). A `connected: false` in `/api/video/status` usually means the app isn't foregrounded — not a backend bug.
+- The web backend's `LiveVideoBroadcaster` auto-reconnects with exponential backoff (1s → 10s). A `connected: false` in `GET /api/drones/{id}/video/status` usually means the app isn't foregrounded — not a backend bug.
+- All control/video routes are now namespaced per drone (`/api/drones/{id}/...`). The old global `/api/stick`, `/ws/stick`, `/api/video.mjpg` paths from the pre-merge fork are **gone**. If you're porting code from before the ARGUS merge, it needs an id; if there was only one drone, add it to `drones.json` and hit its id.
 - The webapp's RC-side package name is pinned: `com.dji.sampleV5.aircraft`. That string must match exactly in the DJI developer portal App registration. The keystore (`msdkkeystore.jks`) is NOT in the repo — users generate it themselves with the passwords in `gradle.properties` (`123456` / alias `msdkkeystore`).
 
 ## Where NOT to put new code
