@@ -360,7 +360,26 @@
         </div>
       </div>
 
-      
+      <!-- Pathing controls (collapsible, collapsed by default) -->
+      <div class="section">
+        <div class="section-head is-collapsed" id="pathing-toggle">
+          <h2>Pathing</h2>
+          <span class="chevron">▾</span>
+        </div>
+        <div class="section-body is-hidden" id="pathing-body">
+          <div class="path-row">
+            <span>Stripe spacing</span>
+            <span><span id="stripe-val">40</span> m</span>
+          </div>
+          <input type="range" id="stripe-spacing" min="10" max="200" step="5" value="40">
+          <div class="path-row" style="margin-top:8px;"><span>Sweep direction</span></div>
+          <div class="stripe-dir">
+            <button id="dir-ew" class="active">E ↔ W</button>
+            <button id="dir-ns">N ↕ S</button>
+          </div>
+          <p class="path-hint">Boustrophedon lawnmower. Overlapping sectors assigned by proximity.</p>
+        </div>
+      </div>
 
       <!-- Drones (collapsible, expanded by default) -->
       <div class="section">
@@ -369,7 +388,7 @@
           <span class="chevron">▾</span>
         </div>
         <div id="drones-body">
-          
+          <button id="btn-register">+ Register drone</button>
           <div id="drone-cameras" class="drone-cameras"></div>
           <div id="drone-empty" class="empty hidden">No drones registered.</div>
         </div>
@@ -454,7 +473,235 @@ map.on('click', (e) => {
 const liveByBackendId = new Map();
 
 // ── Path planning ─────────────────────────────────────────────────────────
+let stripeSpacing = 40;
+let sweepDir = 'ew';
+const R_EARTH = 6378137;
+const pathCache = new Map();
 
+class MinHeap {
+  constructor() { this.data = []; }
+  push(item) { this.data.push(item); this._up(this.data.length - 1); }
+  pop() {
+    if (!this.data.length) return null;
+    const top = this.data[0], end = this.data.pop();
+    if (this.data.length) { this.data[0] = end; this._down(0); }
+    return top;
+  }
+  get size() { return this.data.length; }
+  _up(n) {
+    const item = this.data[n];
+    while (n > 0) {
+      const p = Math.floor((n - 1) / 2), par = this.data[p];
+      if (item.f >= par.f) break;
+      this.data[p] = item; this.data[n] = par; n = p;
+    }
+  }
+  _down(n) {
+    const len = this.data.length, item = this.data[n];
+    while (true) {
+      let l = 2*n+1, r = 2*n+2, s = null;
+      if (l < len && this.data[l].f < item.f) s = l;
+      if (r < len && ((s === null && this.data[r].f < item.f) || (s !== null && this.data[r].f < this.data[l].f))) s = r;
+      if (s === null) break;
+      this.data[n] = this.data[s]; this.data[s] = item; n = s;
+    }
+  }
+}
+
+function toLocal(lat, lng, origin) {
+  return { x: (lng-origin.lng)*Math.PI/180*R_EARTH*Math.cos(origin.lat*Math.PI/180), y: (lat-origin.lat)*Math.PI/180*R_EARTH };
+}
+function toLatLng(x, y, origin) {
+  return [origin.lat+(y/R_EARTH)*180/Math.PI, origin.lng+(x/(R_EARTH*Math.cos(origin.lat*Math.PI/180)))*180/Math.PI];
+}
+function cellKey(x, y) { return x+':'+y; }
+function isInside(g, x, y) { return x>=0&&y>=0&&x<g.width&&y<g.height; }
+function nb4(c) { return [{x:c.x+1,y:c.y},{x:c.x-1,y:c.y},{x:c.x,y:c.y+1},{x:c.x,y:c.y-1}]; }
+function nb8(c) { return [{x:c.x+1,y:c.y},{x:c.x-1,y:c.y},{x:c.x,y:c.y+1},{x:c.x,y:c.y-1},{x:c.x+1,y:c.y+1},{x:c.x+1,y:c.y-1},{x:c.x-1,y:c.y+1},{x:c.x-1,y:c.y-1}]; }
+
+function touchesForeign(g, id, c) {
+  for (const n of nb8(c)) { if (!isInside(g,n.x,n.y)||g.owner[n.y][n.x]!==id) return true; } return false;
+}
+
+function seamCost(g, id, c) {
+  let owned=0, foreign=0, empty=0;
+  for (const n of nb8(c)) {
+    if (!isInside(g,n.x,n.y)){empty++;continue;}
+    const o=g.owner[n.y][n.x]; if(o===id)owned++;else if(o===null)empty++;else foreign++;
+  }
+  return Math.max(1, (owned<8?2:28)+owned*2-foreign*2-empty);
+}
+
+function manhattan(a,b){return Math.abs(a.x-b.x)+Math.abs(a.y-b.y);}
+
+function seamPath(g, id, start, goal) {
+  const sk=cellKey(start.x,start.y), gk=cellKey(goal.x,goal.y);
+  const heap=new MinHeap(), prev=new Map(), gs=new Map(), closed=new Set();
+  gs.set(sk,0); heap.push({x:start.x,y:start.y,key:sk,f:manhattan(start,goal)});
+  while(heap.size>0){
+    const cur=heap.pop(); if(!cur)break; if(closed.has(cur.key))continue; closed.add(cur.key);
+    if(cur.key===gk){const out=[];let c={x:cur.x,y:cur.y};while(c){out.push(c);c=prev.get(cellKey(c.x,c.y))||null;}return out.reverse();}
+    for(const n of nb4(cur)){
+      if(!isInside(g,n.x,n.y)||g.owner[n.y][n.x]!==id)continue;
+      const nk=cellKey(n.x,n.y); if(closed.has(nk))continue;
+      const t=(gs.get(cur.key)??Infinity)+seamCost(g,id,n);
+      if(t<(gs.get(nk)??Infinity)){prev.set(nk,{x:cur.x,y:cur.y});gs.set(nk,t);heap.push({x:n.x,y:n.y,key:nk,f:t+manhattan(n,goal)});}
+    }
+  }
+  return null;
+}
+
+function shortestPath(g, id, start, goal) {
+  const ck=id+'|'+cellKey(start.x,start.y)+'|'+cellKey(goal.x,goal.y);
+  if(pathCache.has(ck))return pathCache.get(ck);
+  const rk=id+'|'+cellKey(goal.x,goal.y)+'|'+cellKey(start.x,start.y);
+  if(pathCache.has(rk)){const r=pathCache.get(rk);const out=r?r.slice().reverse():null;pathCache.set(ck,out);return out;}
+  const p=seamPath(g,id,start,goal); pathCache.set(ck,p); return p;
+}
+
+function straightPath(g,id,start,goal){
+  if(start.x===goal.x){const d=goal.y>start.y?1:-1,path=[{x:start.x,y:start.y}];for(let y=start.y+d;y!==goal.y+d;y+=d){if(!isInside(g,start.x,y)||g.owner[y][start.x]!==id)return null;path.push({x:start.x,y});}return path;}
+  if(start.y===goal.y){const d=goal.x>start.x?1:-1,path=[{x:start.x,y:start.y}];for(let x=start.x+d;x!==goal.x+d;x+=d){if(!isInside(g,x,start.y)||g.owner[start.y][x]!==id)return null;path.push({x,y:start.y});}return path;}
+  return null;
+}
+
+function cellCenter(g,c){return{x:g.xMin+(c.x+0.5)*g.cell,y:g.yMin+(c.y+0.5)*g.cell,cell:{x:c.x,y:c.y}};}
+
+function simplify(pts){
+  if(pts.length<=2)return pts.slice();
+  const out=[pts[0]];
+  for(let i=1;i<pts.length-1;i++){const a=out[out.length-1],b=pts[i],c=pts[i+1];if(Math.abs((b.x-a.x)*(c.y-b.y)-(b.y-a.y)*(c.x-b.x))>=1e-9)out.push(b);}
+  out.push(pts[pts.length-1]); return out;
+}
+
+function contiguousRuns(xs){
+  if(!xs.length)return[];const runs=[];let s=xs[0],p=xs[0];
+  for(let i=1;i<xs.length;i++){if(xs[i]===p+1){p=xs[i];continue;}runs.push({start:s,end:p});s=xs[i];p=xs[i];}
+  runs.push({start:s,end:p});return runs;
+}
+
+function findComponents(g,id){
+  const vis=Array.from({length:g.height},()=>Array(g.width).fill(false)),comps=[],dirs=[[1,0],[-1,0],[0,1],[0,-1]];
+  for(let y=0;y<g.height;y++)for(let x=0;x<g.width;x++){
+    if(vis[y][x]||g.owner[y][x]!==id)continue;
+    const q=[{x,y}],comp=[];vis[y][x]=true;
+    while(q.length){const cur=q.shift();comp.push(cur);for(const[dx,dy]of dirs){const nx=cur.x+dx,ny=cur.y+dy;if(!isInside(g,nx,ny)||vis[ny][nx]||g.owner[ny][nx]!==id)continue;vis[ny][nx]=true;q.push({x:nx,y:ny});}}
+    comps.push(comp);
+  }
+  return comps;
+}
+
+function sweepRoute(g, id, comp) {
+  const set=new Set(comp.map(c=>cellKey(c.x,c.y))),rows=new Map();
+  for(const c of comp){if(!rows.has(c.y))rows.set(c.y,[]);rows.get(c.y).push(c.x);}
+  const ys=Array.from(rows.keys()).sort((a,b)=>a-b),route=[];
+  for(let i=0;i<ys.length;i++){
+    const y=ys[i],xs=rows.get(y).sort((a,b)=>a-b),runs=contiguousRuns(xs);
+    if(i%2===1)runs.reverse();
+    for(const run of runs){
+      const seq=[];
+      if(i%2===0){for(let x=run.start;x<=run.end;x++)if(set.has(cellKey(x,y)))seq.push({x,y});}
+      else{for(let x=run.end;x>=run.start;x--)if(set.has(cellKey(x,y)))seq.push({x,y});}
+      if(!seq.length)continue;
+      const pts=seq.map(c=>cellCenter(g,c));
+      if(!route.length){route.push(...pts);continue;}
+      const from=route[route.length-1].cell,to=seq[0];
+      let conn=straightPath(g,id,from,to);
+      if(!conn)conn=shortestPath(g,id,from,to);
+      if(conn&&conn.length>1)route.push(...conn.slice(1).map(c=>cellCenter(g,c)));
+      route.push(...pts);
+    }
+  }
+  return simplify(route);
+}
+
+function boundarySamples(g,id,info,useEnd){
+  const route=info.route,boundary=info.boundary;
+  if(!route.length||!boundary.length)return[];
+  const anchor=useEnd?route[route.length-1].cell:route[0].cell;
+  const sorted=boundary.map(c=>({c,s:manhattan(c,anchor)+seamCost(g,id,c)})).sort((a,b)=>a.s-b.s).slice(0,6).map(x=>x.c);
+  return[...sorted.map(c=>({cell:c,rev:false})),...sorted.map(c=>({cell:c,rev:true}))];
+}
+
+function buildRoute(g, id) {
+  const comps=findComponents(g,id);
+  if(!comps.length)return[];
+  const infos=comps.map(comp=>({route:sweepRoute(g,id,comp),boundary:comp.filter(c=>touchesForeign(g,id,c))})).filter(i=>i.route.length>0);
+  if(!infos.length)return[];
+  let merged=infos.shift();
+  while(infos.length){
+    let best=null;
+    for(let i=0;i<infos.length;i++){
+      const cand=infos[i];
+      for(const a of boundarySamples(g,id,merged,true))for(const b of boundarySamples(g,id,cand,false)){
+        const sc=a.rev?merged.route[0].cell:merged.route[merged.route.length-1].cell;
+        const gc=b.rev?cand.route[cand.route.length-1].cell:cand.route[0].cell;
+        const cp=shortestPath(g,id,sc,gc); if(!cp||cp.length<2)continue;
+        let cost=0;for(let k=1;k<cp.length;k++)cost+=seamCost(g,id,cp[k]);
+        if(!best||cost<best.cost)best={i,ar:a.rev,br:b.rev,cost};
+      }
+    }
+    if(!best){const fb=infos.shift();merged.route=simplify(merged.route.concat(fb.route));merged.boundary=merged.boundary.concat(fb.boundary);continue;}
+    const next=infos.splice(best.i,1)[0];
+    if(best.ar)merged.route.reverse(); if(best.br)next.route.reverse();
+    const sc=merged.route[merged.route.length-1].cell,gc=next.route[0].cell;
+    let conn=straightPath(g,id,sc,gc);if(!conn)conn=shortestPath(g,id,sc,gc);
+    if(conn&&conn.length>1){const pts=conn.slice(1).map(c=>cellCenter(g,c));merged.route=simplify(merged.route.concat(pts).concat(next.route.slice(1)));}
+    else merged.route=simplify(merged.route.concat(next.route));
+    merged.boundary=merged.boundary.concat(next.boundary);
+  }
+  return merged.route.map(p=>({x:p.x,y:p.y}));
+}
+
+function buildGrid(dronesLocal, spacing) {
+  let xMin=Infinity,yMin=Infinity,xMax=-Infinity,yMax=-Infinity;
+  for(const d of dronesLocal){xMin=Math.min(xMin,d.x-d.r);yMin=Math.min(yMin,d.y-d.r);xMax=Math.max(xMax,d.x+d.r);yMax=Math.max(yMax,d.y+d.r);}
+  const cell=Math.max(20,Math.round(spacing*0.75));
+  xMin-=cell;yMin-=cell;xMax+=cell;yMax+=cell;
+  const width=Math.ceil((xMax-xMin)/cell),height=Math.ceil((yMax-yMin)/cell);
+  const owner=Array.from({length:height},()=>Array(width).fill(null));
+  let owned=0;
+  for(let gy=0;gy<height;gy++){const y=yMin+(gy+0.5)*cell;for(let gx=0;gx<width;gx++){const x=xMin+(gx+0.5)*cell;let best=null;for(const d of dronesLocal){const dx=x-d.x,dy=y-d.y,d2=dx*dx+dy*dy;if(d2>d.r*d.r)continue;if(!best||d2<best.d2||(d2===best.d2&&d.r<best.r)||(d2===best.d2&&d.r===best.r&&d.id<best.id))best={id:d.id,d2,r:d.r};}owner[gy][gx]=best?best.id:null;if(best)owned++;}}
+  pathCache.clear();
+  return{owner,xMin,yMin,cell,width,height,coverageArea:owned*cell*cell};
+}
+
+function computePaths() {
+  const drones=Array.from(liveByBackendId.values());
+  if(!drones.length)return{paths:{},coverage:0};
+  const origin={lat:drones[0].lat,lng:drones[0].lng};
+  const local=drones.map(d=>{const p=toLocal(d.lat,d.lng,origin);return{id:d.sourceId,x:p.x,y:p.y,r:d.reach};});
+  const rotated=sweepDir==='ns'?local.map(d=>({id:d.id,x:d.y,y:d.x,r:d.r})):local.map(d=>({...d}));
+  const g=buildGrid(rotated,stripeSpacing);
+  const paths={};
+  for(const drone of rotated){const route=buildRoute(g,drone.id);paths[drone.id]=route.map(pt=>{const u=sweepDir==='ns'?{x:pt.y,y:pt.x}:pt;return toLatLng(u.x,u.y,origin);});}
+  return{paths,coverage:g.coverageArea};
+}
+
+let pathUpdateHandle=null;
+function schedulePathUpdate(){if(pathUpdateHandle)return;pathUpdateHandle=requestAnimationFrame(()=>{pathUpdateHandle=null;drawPaths();});}
+
+function fmtArea(m2){if(m2>1e6)return(m2/1e6).toFixed(2)+' km²';if(m2>1e4)return(m2/1e4).toFixed(2)+' ha';return Math.round(m2)+' m²';}
+
+function drawPaths(){
+  pathLayer.clearLayers();
+  const{paths,coverage}=computePaths();
+  for(const[,d]of liveByBackendId){
+    const pts=paths[d.sourceId];
+    if(!pts||pts.length<2)continue;
+    L.polyline(pts,{pane:'pathPane',color:d.color,weight:2,opacity:0.9,lineCap:'round',lineJoin:'round'}).addTo(pathLayer);
+  }
+}
+
+// Pathing controls
+document.getElementById('stripe-spacing').addEventListener('input',(e)=>{
+  stripeSpacing=parseInt(e.target.value,10);
+  document.getElementById('stripe-val').textContent=stripeSpacing;
+  schedulePathUpdate();
+});
+document.getElementById('dir-ew').addEventListener('click',()=>{sweepDir='ew';document.getElementById('dir-ew').classList.add('active');document.getElementById('dir-ns').classList.remove('active');drawPaths();});
+document.getElementById('dir-ns').addEventListener('click',()=>{sweepDir='ns';document.getElementById('dir-ns').classList.add('active');document.getElementById('dir-ew').classList.remove('active');drawPaths();});
+initToggle('pathing-toggle','pathing-body');
 
 function addLiveDrone(s, lat, lng) {
   const idx = liveByBackendId.size;
@@ -485,19 +732,6 @@ function reconcileLive(snapshots) {
       existing.marker.setLatLng([lat, lng]);
       existing.circle.setLatLng([lat, lng]);
       existing.marker.setTooltipContent(s.label || s.id);
-      // Connect our native backend path rendering to the new UI loop
-      if (s.path && s.path.length > 0) {
-          const pts = s.path.map(p => [(p.lat || p.latitude), (p.lon || p.longitude)]);
-          if (existing.pathLine) {
-              existing.pathLine.setLatLngs(pts);
-          } else {
-              existing.pathLine = L.polyline(pts, {pane: 'pathPane', color: existing.color, weight: 2, dashArray: '5,5'}).addTo(pathLayer);
-          }
-      } else if (existing.pathLine) {
-          map.removeLayer(existing.pathLine);
-          existing.pathLine = null;
-      }
-
     }
   }
   // Remove gone drones
@@ -506,7 +740,6 @@ function reconcileLive(snapshots) {
       map.removeLayer(d.marker);
       map.removeLayer(d.circle);
       liveByBackendId.delete(id);
-      if (d.pathLine) map.removeLayer(d.pathLine);
     }
   }
   renderList();
@@ -669,7 +902,7 @@ window.argusAddDetection = addDetection; // expose for future backend push
 document.getElementById('btn-dispatch').addEventListener('click', () => {
   const prompt = document.getElementById('prompt-textarea').value.trim();
   if (!prompt) return;
-  fetch('/api/prompt', {method: 'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({prompt})});
+  // TODO: POST to /api/dispatch or equivalent when SAM3 loop is wired
   console.log('Dispatch prompt:', prompt);
 });
 
@@ -694,12 +927,7 @@ function connectLiveWs() {
   try { liveWs = new WebSocket(`${proto}://${location.host}/ws/drones`); } catch (_) { return; }
   liveWs.addEventListener('open', () => { liveWsRetry = 1000; });
   liveWs.addEventListener('message', (ev) => {
-    try {
-      const data = JSON.parse(ev.data);
-      reconcileLive(data.drones || []);
-      const alerts = data.alerts || [];
-      alerts.forEach(a => window.argusAddDetection(a.droneId, a.text, a.cls));
-    } catch (_) {}
+    try { reconcileLive(JSON.parse(ev.data).drones || []); } catch (_) {}
   });
   liveWs.addEventListener('close', () => { setTimeout(connectLiveWs, liveWsRetry); liveWsRetry = Math.min(liveWsRetry * 2, 10000); });
 }
@@ -708,6 +936,121 @@ fetchAndRender();
 livePollHandle = setInterval(fetchAndRender, 5000);
 connectLiveWs();
 
+// ── Registration (3-step: dialog → map click → slider confirm) ───────────
+(function () {
+  const dlg = document.getElementById('add-dialog');
+  const regErr = document.getElementById('reg-error');
+  const regId = document.getElementById('reg-id');
+  const regLabel = document.getElementById('reg-label');
+  const regIp = document.getElementById('reg-ip');
+  const regMock = document.getElementById('reg-mock');
+  const mapEl = document.getElementById('map');
+  const placePanel = document.getElementById('place-panel');
+  const placeIdEl = document.getElementById('place-id');
+  const placeCoordsEl = document.getElementById('place-coords');
+  const placeSlider = document.getElementById('place-reach');
+  const placeReachVal = document.getElementById('place-reach-val');
+  const placeErr = document.getElementById('place-err');
+  const placeConfirmBtn = document.getElementById('place-confirm');
+
+  let regState = null;
+
+  document.getElementById('btn-register').addEventListener('click', () => {
+    cancel({ silent: true });
+    regErr.textContent = ''; regId.value = ''; regLabel.value = ''; regIp.value = '';
+    regMock.checked = false; regIp.disabled = false;
+    if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
+    setTimeout(() => regId.focus(), 0);
+  });
+
+  regMock.addEventListener('change', () => {
+    if (regMock.checked) { regIp.value = 'mock'; regIp.disabled = true; }
+    else { regIp.disabled = false; if (regIp.value === 'mock') regIp.value = ''; }
+  });
+
+  document.getElementById('reg-cancel').addEventListener('click', () => dlg.close());
+
+  document.getElementById('reg-save').addEventListener('click', () => {
+    regErr.textContent = '';
+    const isMock = regMock.checked;
+    const id = regId.value.trim();
+    const rcIp = isMock ? 'mock' : regIp.value.trim();
+    if (!id) { regErr.textContent = 'ID is required.'; return; }
+    if (!isMock && !rcIp) { regErr.textContent = 'RC IP is required (or tick Mock).'; return; }
+    const body = { id, rc_ip: rcIp, mock: isMock };
+    if (regLabel.value.trim()) body.label = regLabel.value.trim();
+    dlg.close();
+    regState = { phase: 'arm', body };
+    mapEl.classList.add('placement-arm');
+  });
+
+  window.__argusPlaceClick = function (latlng) {
+    if (!regState) return false;
+    if (regState.phase === 'arm') {
+      const { body } = regState;
+      const reach = 800;
+      const color = PALETTE[(Math.random() * PALETTE.length) | 0];
+      const pm = L.circleMarker(latlng, { radius: 9, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 }).addTo(map);
+      pm.bindTooltip(body.id, { permanent: true, direction: 'top', offset: [0, -8], className: 'drone-label' });
+      const pc = L.circle(latlng, { pane: 'coveragePane', interactive: false, radius: reach, color, weight: 2, opacity: 1, dashArray: '6 6', fillColor: color, fillOpacity: 0.10 }).addTo(map);
+      regState = { phase: 'preview', body, latlng, reach, pm, pc };
+      placeIdEl.textContent = body.id + (body.mock ? ' (mock)' : '');
+      placeCoordsEl.textContent = `${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}`;
+      placeSlider.value = String(reach); placeReachVal.textContent = reach;
+      placeErr.textContent = ''; placeConfirmBtn.disabled = false;
+      placePanel.classList.remove('hidden');
+      mapEl.classList.remove('placement-arm');
+      return true;
+    }
+    if (regState.phase === 'preview') {
+      regState.latlng = latlng;
+      regState.pm.setLatLng(latlng);
+      regState.pc.setLatLng(latlng);
+      placeCoordsEl.textContent = `${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}`;
+      return true;
+    }
+    return false;
+  };
+
+  placeSlider.addEventListener('input', (e) => {
+    if (!regState || regState.phase !== 'preview') return;
+    const r = parseInt(e.target.value, 10);
+    regState.reach = r; regState.pc.setRadius(r); placeReachVal.textContent = r;
+  });
+
+  document.getElementById('place-cancel').addEventListener('click', () => cancel());
+
+  placeConfirmBtn.addEventListener('click', async () => {
+    if (!regState || regState.phase !== 'preview') return;
+    placeErr.textContent = ''; placeConfirmBtn.disabled = true;
+    const body = { ...regState.body, home_lat: regState.latlng.lat, home_lng: regState.latlng.lng, reach_m: regState.reach };
+    try {
+      const res = await fetch('/api/drones', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!res.ok) { const d = await res.json().catch(() => ({ detail: res.statusText })); throw new Error(d.detail || res.statusText); }
+      cancel({ silent: true });
+      fetchAndRender();
+    } catch (e) {
+      placeErr.textContent = 'Registration failed: ' + e.message;
+      placeConfirmBtn.disabled = false;
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && regState) cancel();
+  });
+
+  function cancel({ silent = false } = {}) {
+    if (!regState) return;
+    if (regState.phase === 'preview') {
+      map.removeLayer(regState.pm);
+      map.removeLayer(regState.pc);
+      placePanel.classList.add('hidden');
+    }
+    regState = null;
+    mapEl.classList.remove('placement-arm');
+    if (!silent) fetchAndRender();
+  }
+})();
 
 // ── Utility ───────────────────────────────────────────────────────────────
 function esc(s) {

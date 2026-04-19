@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>ARGUS — Drone Control</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand">
+            <a href="/" class="logo" title="Back to ARGUS dashboard" style="text-decoration:none;color:inherit">◆</a>
+            <a href="/" class="title" style="text-decoration:none;color:inherit">ARGUS</a>
+            <span class="version" id="drone-badge">—</span>
+        </div>
+        <div class="status-group">
+            <span class="status-pill" id="mode-pill" data-state="unknown">MODE: —</span>
+            <span class="status-pill" id="ws-pill" data-state="disconnected">WS: —</span>
+            <span class="status-pill" id="vs-pill" data-state="off">Virtual Stick: OFF</span>
+            <span class="status-pill" id="video-pill" data-state="disconnected">VIDEO: —</span>
+        </div>
+    </header>
+
+    <nav class="tabs" role="tablist">
+        <button class="tab is-active" role="tab" data-tab="control">Control</button>
+        <button class="tab" role="tab" data-tab="video">Video</button>
+    </nav>
+
+    <main class="panel">
+        <!-- ── Control tab ───────────────────────────────────────── -->
+        <section class="tab-panel is-active" data-panel="control">
+            <div id="banner" class="banner banner--warn">
+                Virtual Stick is <strong>OFF</strong>. The drone ignores joystick input until you press <strong>Enable Virtual Stick</strong>.
+            </div>
+
+            <div class="button-row">
+                <button id="btn-enable" class="btn btn--primary">Enable Virtual Stick</button>
+                <button id="btn-takeoff" class="btn">Takeoff</button>
+                <button id="btn-land" class="btn">Land</button>
+                <button id="btn-rth" class="btn">Return to Home</button>
+            </div>
+
+            <div class="sticks" id="sticks">
+                <div class="stick-wrap">
+                    <canvas id="left-stick" class="stick" width="280" height="280"></canvas>
+                    <div class="stick-label">
+                        <div class="stick-title">Left stick</div>
+                        <div class="stick-axes">
+                            <span>X → <strong>yaw</strong></span>
+                            <span>Y → <strong>throttle</strong></span>
+                        </div>
+                    </div>
+                </div>
+                <div class="stick-wrap">
+                    <canvas id="right-stick" class="stick" width="280" height="280"></canvas>
+                    <div class="stick-label">
+                        <div class="stick-title">Right stick</div>
+                        <div class="stick-axes">
+                            <span>X → <strong>roll</strong></span>
+                            <span>Y → <strong>pitch</strong></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="stop-row">
+                <button id="btn-disable" class="btn btn--danger">
+                    <span class="btn-icon">■</span>DISABLE · HARD STOP
+                </button>
+            </div>
+
+            <section class="log-panel">
+                <div class="log-header">
+                    <span>Activity</span>
+                    <button id="btn-clear-log" class="btn btn--small">Clear</button>
+                </div>
+                <ol id="log" class="log"></ol>
+            </section>
+        </section>
+
+        <!-- ── Video tab ─────────────────────────────────────────── -->
+        <section class="tab-panel" data-panel="video">
+            <div class="video-bar">
+                <div class="video-meta" id="video-meta">connecting…</div>
+                <div class="video-actions">
+                    <a class="btn btn--small" id="link-video-new-tab" href="/video" target="_blank" rel="noopener">Open in new tab ↗</a>
+                    <button id="btn-video-reload" class="btn btn--small">Reload stream</button>
+                </div>
+            </div>
+            <div class="video-frame">
+                <img id="video-img" alt="drone live feed">
+                <div class="video-placeholder" id="video-placeholder">
+                    <div class="spinner"></div>
+                    <div>Waiting for first frame…</div>
+                    <div class="video-hint">If this hangs, confirm the WildBridge app's <em>Virtual Stick</em> page is foregrounded on the phone.</div>
+                </div>
+            </div>
+        </section>
+
+        <footer class="footnote">
+            ARGUS Hub bridges browser → RC HTTP :8080 / RTSP :8554. No auth. Trusted LAN only.
+            <a href="/" style="margin-left:8px;color:inherit">← Back to dashboard</a>
+        </footer>
+    </main>
+
+    <script src="/static/app.js" defer></script>
+</body>
+</html>

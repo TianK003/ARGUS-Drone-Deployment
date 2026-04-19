@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>ARGUS — Camera Wall</title>
+<style>
+  :root {
+    --bg:     #141a2e;
+    --panel:  #1a2238;
+    --border: #2d3d5a;
+    --text:   #dde4f0;
+    --muted:  #8fa8c8;
+    --accent: #3b82f6;
+    --danger: #f85149;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 13px; overflow: hidden; }
+
+  /* ── Top bar ── */
+  .topbar {
+    display: flex; align-items: center; gap: 16px;
+    padding: 10px 18px;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .topbar a { color: var(--muted); text-decoration: none; font-size: 12px; }
+  .topbar a:hover { color: var(--text); }
+  .brand-row { display: flex; align-items: center; gap: 8px; }
+  .brand-logo { height: 44px; width: auto; }
+  .brand-name { font-size: 14px; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; color: var(--text); }
+  .topbar .count { margin-left: auto; color: var(--muted); font-size: 11px; }
+
+  /* ── Grid wrapper ── */
+  #wall {
+    height: calc(100vh - 43px);
+    overflow-y: auto;
+    padding: 10px;
+  }
+
+  /* ── Camera grid: 4 columns ── */
+  #grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+  }
+
+  .cam-tile {
+    background: #000;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    aspect-ratio: 16 / 9;
+    position: relative;
+  }
+
+  .cam-tile img {
+    width: 100%; height: 100%;
+    object-fit: cover; display: block;
+  }
+
+  .cam-label {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    padding: 3px 8px;
+    background: rgba(0,0,0,0.7);
+    font-size: 11px; color: var(--text);
+    display: flex; align-items: center; gap: 6px;
+  }
+
+  .cam-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .cam-dot.online  { background: var(--accent); }
+  .cam-dot.offline { background: var(--danger); }
+
+  .cam-label .cam-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .cam-offline {
+    display: flex; align-items: center; justify-content: center;
+    width: 100%; height: 100%;
+    color: var(--muted); font-size: 12px;
+  }
+
+  .cam-no-signal { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 11px; }
+
+  .empty {
+    grid-column: 1 / -1;
+    padding: 60px 0;
+    text-align: center; color: var(--muted); font-size: 13px;
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <a href="/">← Dashboard</a>
+  <div class="brand-row">
+    <img src="/static/argus_icon.png" class="brand-logo" alt="ARGUS">
+    <span class="brand-name">ARGUS</span>
+  </div>
+  <span class="count" id="count">—</span>
+</div>
+
+<div id="wall">
+  <div id="grid"></div>
+</div>
+
+<script>
+'use strict';
+
+const grid = document.getElementById('grid');
+const countEl = document.getElementById('count');
+
+// droneId → tile element
+const tiles = new Map();
+
+function reconcile(snapshots) {
+  const seen = new Set();
+  countEl.textContent = snapshots.length + ' drone' + (snapshots.length === 1 ? '' : 's');
+
+  if (snapshots.length === 0) {
+    if (!grid.querySelector('.empty')) {
+      stopAll();
+      grid.innerHTML = '<div class="empty">No drones registered.</div>';
+    }
+    return;
+  }
+
+  // Remove stale empty placeholder
+  const emptyEl = grid.querySelector('.empty');
+  if (emptyEl) grid.removeChild(emptyEl);
+
+  for (const s of snapshots) {
+    seen.add(s.id);
+    if (tiles.has(s.id)) {
+      // Update status dot only
+      const dot = tiles.get(s.id).querySelector('.cam-dot');
+      if (dot) dot.className = 'cam-dot ' + (s.online ? 'online' : 'offline');
+      continue;
+    }
+
+    const tile = document.createElement('div');
+    tile.className = 'cam-tile';
+    tile.dataset.id = s.id;
+
+    const img = document.createElement('img');
+    img.alt = s.label || s.id;
+    img.src = `/api/drones/${encodeURIComponent(s.id)}/video.mjpg?t=${Date.now()}`;
+    img.onerror = () => {
+      img.style.display = 'none';
+      if (!tile.querySelector('.cam-no-signal')) {
+        const ns = document.createElement('div');
+        ns.className = 'cam-no-signal';
+        ns.textContent = 'no signal';
+        tile.insertBefore(ns, tile.firstChild);
+      }
+    };
+    tile.appendChild(img);
+
+    const lbl = document.createElement('div');
+    lbl.className = 'cam-label';
+    lbl.innerHTML =
+      `<span class="cam-dot ${s.online ? 'online' : 'offline'}"></span>` +
+      `<span class="cam-name">${esc(s.label || s.id)}</span>`;
+    tile.appendChild(lbl);
+
+    grid.appendChild(tile);
+    tiles.set(s.id, tile);
+  }
+
+  // Remove tiles for drones that disappeared
+  for (const [id, tile] of tiles) {
+    if (!seen.has(id)) {
+      const img = tile.querySelector('img');
+      if (img) img.src = '';
+      grid.removeChild(tile);
+      tiles.delete(id);
+    }
+  }
+}
+
+function stopAll() {
+  for (const tile of tiles.values()) {
+    const img = tile.querySelector('img');
+    if (img) img.src = '';
+  }
+  tiles.clear();
+}
+
+async function fetchDrones() {
+  try {
+    const res = await fetch('/api/drones');
+    if (!res.ok) throw new Error(res.status);
+    const data = await res.json();
+    reconcile(data.drones || []);
+  } catch (e) {
+    console.warn('poll failed:', e.message);
+  }
+}
+
+// WebSocket live updates
+function connectWs() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  let ws;
+  try { ws = new WebSocket(`${proto}://${location.host}/ws/drones`); } catch (_) { return; }
+  let retry = 1000;
+  ws.addEventListener('open', () => { retry = 1000; });
+  ws.addEventListener('message', (ev) => {
+    try { reconcile(JSON.parse(ev.data).drones || []); } catch (_) {}
+  });
+  ws.addEventListener('close', () => { setTimeout(connectWs, retry); retry = Math.min(retry * 2, 10000); });
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+fetchDrones();
+setInterval(fetchDrones, 5000);
+connectWs();
+</script>
+</body>
+</html>

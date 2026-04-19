@@ -34,15 +34,14 @@ This work is part of the WildDrone project, funded by the European Union's Horiz
 
 ### Key Features
 
-- **Real-time Telemetry**: TCP socket streaming (port 8081) for continuous flight data at 20Hz
-- **HTTP Command Interface**: RESTful API (port 8080) for drone control commands
-- **Live Video Streaming**: RTSP video feed compatible with OpenCV, FFmpeg, and VLC
-- **DJI Native Waypoint Missions**: Support for KMZ-based wayline missions via DJI's native system
-- **PID-based Navigation**: Custom trajectory following with pure pursuit algorithm
-- **Multi-drone Coordination**: Support for up to 10 concurrent drones with sub-100ms latency
-- **Wildlife Monitoring**: Integrated YOLO-based object detection and geolocation
-- **Scientific Applications**: Proven in conservation, wildfire detection, and atmospheric research
-- **Cross-platform Integration**: Compatible with Python, ROS 2, and standard TCP/HTTP clients
+- **Real-time AI Vision (SAM 3.1)**: Centralized "VisionDaemon" multiplexes video feeds across the swarm for natural language object detection using Meta's SAM 3.1.
+- **Modern Glassmorphic UI**: High-fidelity dashboard for swarm-scale monitoring, integrated telemetry, and an AI "Detections Tray" for real-time alerts.
+- **Edge-Driven Architecture**: Drones join the hub natively via WebSockets; no manual pre-registration required.
+- **Server-Side Path Allocation**: Dynamic, algorithmic zigzag/sweep path calculation for the entire swarm, optimized to maintain controller LOS.
+- **Real-time Telemetry**: 20Hz low-latency telemetry processing and 1Hz fan-out to the UI.
+- **Live Swarm Video**: MJPEG multiplexing allows monitoring up to 10+ drones simultaneously in a single dashboard or camera wall.
+- **Multi-drone Coordination**: Support for massive concurrent fleets with sub-100ms command latency.
+- **Cross-platform Integration**: Compatible with standard DJI RC platforms, Python scripts, and mock simulation environments.
 
 ## Supported Hardware
 
@@ -202,118 +201,94 @@ requests.post(f"http://{rc_ip}:8080/send/navigateTrajectoryDJINative", data=wayp
 
 ## Web Ground Station (ARGUS Hub)
 
-`GroundStation/WebServer/` is a FastAPI backend + vanilla-JS frontend that lets an operator fly **a whole fleet** of drones from any browser on the LAN. Three surfaces:
+The **ARGUS Hub** (`GroundStation/WebServer/`) is a unified FastAPI-based command-and-control center for operating drone swarms. It replaces manual fleet management with an **Edge-Driven** paradigm where drones discover and join the Hub automatically.
 
-- **`/` — Leaflet multi-drone dashboard.** Two modes:
-  - **Live**: markers come from the drone registry (`GET /api/drones` + `/ws/drones` at 1 Hz). Each row has a `Control ↗` link that opens the single-drone UI. A `+ Register drone` dialog adds an RC at runtime; the registry persists to `drones.json`.
-  - **Planning**: a Boustrophedon (lawnmower) patrol-path planner — click to place drones, drag to relocate, adjust reach + stripe spacing, then `Save plan` to persist the computed paths under `plans/`.
-- **`/drone/{id}` — single-drone Control tab + Video tab.** On-screen joysticks (yaw/throttle + roll/pitch), **Takeoff / Land / RTH / Enable Virtual Stick / hard-stop** buttons, activity log, MJPEG video tab. Inputs stream over a WebSocket (`/ws/drones/{id}/stick`) at up to 20 Hz and are forwarded to the RC's `/send/stick`. A 500 ms deadman sends a zeroed stick command if the socket goes silent.
-- **`/video?drone={id}` — standalone full-screen MJPEG viewer** for popping the feed onto a second monitor.
+### Central Pillars
+1. **The Modern Dashboard (`/`)**: 
+   - A glassmorphic monitoring interface with a live Leaflet map and dynamic video grid.
+   - **Real-time Pathing**: The Hub automatically assigns non-overlapping zigzag/sweep patterns to every drone that joins.
+   - **Detections Tray**: AI-detected objects appear instantly as notifications with time-stamps and drone IDs.
+2. **SAM 3.1 AI Vision (`VisionDaemon`)**:
+   - The hub runs a background inference loop that multiplexes incoming video frames through the SAM 3.1 model.
+   - Operators can dispatch a "Master Prompt" (e.g., "blue truck" or "person in red jacket") to the entire swarm via the dashboard.
+3. **Edge Connectivity**: 
+   - Drones connect via `ws://{HUB_IP}:8000/ws/swarm/{uuid}`.
+   - Binary video frames are pushed via POST to the Hub's ingest endpoint, while telemetry flows over the persistent socket.
 
-### Architecture
+### System Architecture
 
+```mermaid
+graph TD
+    subgraph Swarm Hub [ARGUS Hub :8000]
+        RD[Registry]
+        VD[VisionDaemon + SAM 3.1]
+        RS[Route Server]
+    end
+
+    subgraph Edge Client [Drone / Phone]
+        WB[WildBridge App]
+        MC[Edge Client / mock_remote]
+    end
+
+    Dashboard[Browser Dashboard]
+
+    MC -- "Telemetry + Join (WS)" --> RD
+    MC -- "Binary Video (POST)" --> VD
+    VD -- "AI Alerts (Memory Queue)" --> RD
+    RD -- "State + Alerts (WS)" --> Dashboard
+    RS -- "Path Updates (WS)" --> MC
 ```
-browser ──HTTP + WebSocket──► ARGUS Hub (:8000) ──HTTP  :8080──► RC / phone ──► drone
-                                                 ──TCP   :8081──► RC / phone (telemetry)
-                                                 ──RTSP  :8554──► RC / phone (video)
-```
 
-One ARGUS Hub ↔ N drones. Nothing in the DJI RC app needs to change — the webapp only uses the public HTTP/TCP/RTSP endpoints already exposed by WildBridge.
+### Installation & Startup
 
-### Requirements
-
-- The phone or RC Pro is already running the WildBridge app with the **Testing Tools → Virtual Stick** page foregrounded (this is what starts the :8080 / :8081 / :8554 servers).
-- Your laptop is on the same LAN and can `ping` / `curl` the phone's IP.
-- Python **3.9+** on the laptop.
-
-### Install
-
+#### 1. Setup Environment
 ```bash
 cd GroundStation/WebServer
-python -m venv .venv
-# macOS / Linux:
-source .venv/bin/activate
-# Windows (PowerShell):
-.\.venv\Scripts\Activate.ps1
-
+python -m venv venv
+venv\Scripts\activate  # Windows
 pip install -r requirements.txt
 ```
+*Note: GPU support (CUDA) is highly recommended for SAM 3.1 inference.*
 
-Dependencies (pulled by `requirements.txt`):
-- `fastapi`, `uvicorn[standard]` — web server + WebSocket
-- `requests` — HTTP client to the RC
-- `opencv-python-headless`, `numpy` — RTSP decoding + JPEG re-encoding for the video tab
-
-### Run
-
+#### 2. Run the Hub
 ```bash
-# Dev mode — no drone needed. Seeds one mock drone at Ljubljana; mock video renders a test pattern.
-python -m app --mock
-
-# Live mode — reads drones.json from WebServer/ (copy drones.example.json to drones.json).
 python -m app
+```
+*Flags:*
+- `--test`: Uses small 5x5m target areas for simulated flight testing.
+- `--no-vision`: Disables the SAM 3.1 VisionDaemon (saves VRAM).
 
-# Point at a different registry path:
-python -m app --drones-config /path/to/drones.json
+#### 3. Simulated Multi-Drone Testing
+Use our mock client to launch multiple simulated drones from different "launch sites":
+```bash
+# Launch Drone 1 (Near starting point A)
+python -m client.mock_remote --id drone-alpha --cam-folder ./mock_images/forest/
 
-# Recommended cap for a first real flight: tighter than the default 0.3.
-python -m app --max-stick 0.15
-
-# Skip the video broadcaster for every drone (useful if another process owns the RTSP feed).
-python -m app --no-video
-
-# Expose on the LAN instead of localhost-only (so a phone / tablet can open the UI).
-python -m app --host 0.0.0.0
+# Launch Drone 2 (Near starting point B)
+python -m client.mock_remote --id drone-beta --cam-folder ./mock_images/meadow/
 ```
 
-Then open **<http://localhost:8000>** in a browser. The dashboard lists every drone in the registry, with a `Control ↗` link to the per-drone UI.
-
-| Flag | Default | Meaning |
-|---|---|---|
-| `--mock` | off | Force all drones to mock mode; seed a Ljubljana mock drone if `drones.json` is empty. |
-| `--drones-config PATH` | `WebServer/drones.json` | Registry file (JSON). Persisted on every add/remove via the UI. |
-| `--host HOST` | `127.0.0.1` | Bind address. Use `0.0.0.0` to expose on the LAN. |
-| `--port PORT` | `8000` | Web-server port. |
-| `--max-stick F` | `0.3` | Saturation cap in `[0, 1]` applied to every stick axis before forwarding. |
-| `--no-video` | off | Disable the RTSP broadcaster for all drones; `/api/drones/{id}/video/*` returns 503. |
-
-**`drones.json` schema** — one entry per RC. Copy `drones.example.json` as a starting point:
-
-```json
-{
-  "drones": [
-    {"id": "rc-1", "label": "RC Pro", "rc_ip": "192.168.1.100",
-     "home_lat": 46.0569, "home_lng": 14.5058, "reach_m": 800,
-     "mock": false, "enable_video": true}
-  ]
-}
-```
-
-### Endpoints exposed by the web backend
-
-All control/video routes are namespaced per drone.
+### Dashboard Endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/` | Leaflet multi-drone dashboard |
-| GET | `/drone/{id}` | Single-drone Control + Video UI |
-| GET | `/video?drone={id}` | Standalone full-viewport video |
-| GET | `/docs` | Interactive OpenAPI docs (FastAPI default) |
-| GET | `/api/health` | `{ok, drones: [id, …]}` |
-| GET | `/api/drones` | List — each entry includes telemetry snapshot for the map |
-| POST | `/api/drones` | Register a drone: body `{id, rc_ip, label?, home_lat?, home_lng?, reach_m?, mock?, enable_video?}` |
-| GET | `/api/drones/{id}` | Single-drone snapshot |
-| DELETE | `/api/drones/{id}` | Remove from registry (also tears down its video broadcaster) |
-| POST | `/api/drones/{id}/virtual-stick/enable` | Proxies RC `/send/enableVirtualStick` |
-| POST | `/api/drones/{id}/virtual-stick/disable` | Proxies RC `/send/abortMission` (hard-stop) |
-| POST | `/api/drones/{id}/stick` | Body `{leftX, leftY, rightX, rightY}` → RC `/send/stick` |
-| POST | `/api/drones/{id}/takeoff` · `/land` · `/rth` | Matching RC command |
-| WS | `/ws/drones/{id}/stick` | Stream stick values; 20 Hz forward cap + 500 ms deadman |
-| WS | `/ws/drones` | 1 Hz fan-out of `{ts, drones: [snapshot, …]}` — consumed by the dashboard |
-| GET | `/api/drones/{id}/video/status` | `{connected, fps, width, height, last_frame_age_s, mode}` |
-| GET | `/api/drones/{id}/video/snapshot.jpg` | Single most-recent JPEG |
-| GET | `/api/drones/{id}/video.mjpg` | `multipart/x-mixed-replace` MJPEG stream |
-| POST | `/api/plans` | Persist a Boustrophedon plan as JSON under `plans/` |
+| GET | `/` | Main Swarm Dashboard (MAP + VIDEO + AI) |
+| GET | `/api/drones` | List all active drones and their current telemetry |
+| POST | `/api/prompt` | Set the Master Tracking Prompt for SAM 3.1 |
+| WS | `/ws/drones` | 1Hz broadcast of swarm state and AI alerts to UI |
+| WS | `/ws/swarm/{id}` | Edge client connection (Bi-directional telemetry & paths) |
+| POST | `/api/swarm/{id}/video` | Raw JPEG ingest from edge cameras |
+| GET | `/api/swarm/{id}/video.mjpg` | Swarm-wide MJPEG video stream for dashboard tiles |
+| GET | `/cameras` | Dedicated Camera Wall (Grid view of all feeds) |
+| GET | `/video?drone={id}` | Full-screen standalone video feed |
+
+---
+
+### Safety & Overrides
+- **Controller Dominance**: Physical RC inputs always override Virtual Stick commands sent by the Hub.
+- **RTH Priority**: The Hub is designed to maintain paths relative to the **original ascent point** to ensure drones stay within reliable radio range of their respective operators.
+- **Deadman Switch**: The Hub automatically sends hover/neutral commands if an edge connection is lost during flight.
+
 
 ### RTSP smoke test (without the webapp)
 
