@@ -74,6 +74,7 @@ parser.add_argument("--lng", type=float, default=14.5058, help="Initial mock lon
 parser.add_argument("--port-http", type=int, default=8080)
 parser.add_argument("--port-tcp", type=int, default=8081)
 parser.add_argument("--image-folder", type=str, default="", help="Path to folder containing png/jpg frames to loop if camera is locked")
+parser.add_argument("--static-image", type=str, default="", help="Path to a single image; if set, serves that image as the MJPEG feed and never opens the webcam")
 args = parser.parse_args()
 
 STATE = MockState(lat=args.lat, lng=args.lng, alt=0.0)
@@ -189,15 +190,28 @@ async def mjpeg_webcam():
     import numpy as np
     
     def gen():
+        # Static-image mode: skip webcam entirely, serve one frame forever
+        if args.static_image and os.path.exists(args.static_image):
+            frame = cv2.imread(args.static_image)
+            if frame is not None:
+                print(f"[Static] Serving {args.static_image} as MJPEG feed")
+                _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 65])
+                payload = buffer.tobytes()
+                while True:
+                    yield (b"--frame\r\n"
+                           b"Content-Type: image/jpeg\r\n\r\n" + payload + b"\r\n")
+                    time.sleep(0.1)
+                return
+
         cap = get_global_cap()
-        
+
         # Test if camera opened
         if not cap.isOpened():
             # Check if user specified a valid fallback image folder
             if args.image_folder and os.path.exists(args.image_folder):
                 valid_exts = ('.png', '.jpg', '.jpeg')
-                files = [os.path.join(args.image_folder, f) for f in os.path.sorted(os.listdir(args.image_folder)) if f.lower().endswith(valid_exts)]
-                
+                files = [os.path.join(args.image_folder, f) for f in sorted(os.listdir(args.image_folder)) if f.lower().endswith(valid_exts)]
+
                 if files:
                     print(f"[Camera Null] Looping {len(files)} fallback images from {args.image_folder}")
                     # Pre-load frames or stream them off disk? Off disk is fine for testing

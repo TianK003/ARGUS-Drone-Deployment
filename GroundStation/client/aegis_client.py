@@ -180,9 +180,11 @@ def main():
     print("Starting WebSocket Client...")
     threading.Thread(target=start_websocket, daemon=True).start()
     
-    # Block until the server gives us a path
+    # Block until the server gives us a path.
+    # Debounced swarm allocation + staggered joins can push this past 10s when many drones
+    # come up at once; 60s leaves plenty of headroom without blocking forever.
     print("Waiting for Hub to assign patrol region...")
-    if not path_ready_event.wait(timeout=10.0):
+    if not path_ready_event.wait(timeout=60.0):
         print("Failed to receive initial assigned path from server. Exiting.")
         is_running = False
         dji.stopTelemetryStream()
