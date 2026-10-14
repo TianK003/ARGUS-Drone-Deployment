@@ -75,6 +75,7 @@ parser.add_argument("--port-http", type=int, default=8080)
 parser.add_argument("--port-tcp", type=int, default=8081)
 parser.add_argument("--image-folder", type=str, default="", help="Path to folder containing png/jpg frames to loop if camera is locked")
 parser.add_argument("--static-image", type=str, default="", help="Path to a single image; if set, serves that image as the MJPEG feed and never opens the webcam")
+parser.add_argument("--black-screen", action="store_true", help="Serve a solid black screen instead of camera/images")
 args = parser.parse_args()
 
 STATE = MockState(lat=args.lat, lng=args.lng, alt=0.0)
@@ -190,6 +191,17 @@ async def mjpeg_webcam():
     import numpy as np
     
     def gen():
+        # Black-screen mode: skip webcam entirely, serve black frame forever
+        if args.black_screen:
+            frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 65])
+            payload = buffer.tobytes()
+            while True:
+                yield (b"--frame\r\n"
+                       b"Content-Type: image/jpeg\r\n\r\n" + payload + b"\r\n")
+                time.sleep(0.1)
+            return
+
         # Static-image mode: skip webcam entirely, serve one frame forever
         if args.static_image and os.path.exists(args.static_image):
             frame = cv2.imread(args.static_image)

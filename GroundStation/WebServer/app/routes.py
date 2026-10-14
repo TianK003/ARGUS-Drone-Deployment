@@ -294,6 +294,18 @@ async def ws_drones(ws: WebSocket):
 
 MJPEG_BOUNDARY = "frame"
 
+@router.get("/api/swarm/{uuid}/frame.jpg")
+async def get_video_frame(uuid: str, request: Request):
+    """Returns the latest single JPEG frame for polling to avoid connection limits."""
+    entry = _registry(request).get(uuid)
+    if not entry or not entry.get("latest_frame"):
+        return Response(status_code=404)
+    return Response(
+        content=entry["latest_frame"],
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-store", "Connection": "close"}
+    )
+
 @router.get("/api/swarm/{uuid}/video.mjpg")
 async def get_video_stream(uuid: str, request: Request):
     """Dashboard UI consumes this multipart stream to show the latest frame."""

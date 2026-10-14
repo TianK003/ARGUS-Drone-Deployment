@@ -14,8 +14,8 @@ CREATE_NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
 # Target Center
 CENTER_LAT = 46.049564053030984
 CENTER_LNG = 14.468332969551334
-RADIUS_M = 500
-FALLBACK_COUNT = 30  # used only when the image folder has no images
+RADIUS_M = 250
+FALLBACK_COUNT = 6  # used only when the image folder has no images
 START_PORT = 8080
 
 DEFAULT_OVERLAY_FOLDER = "overlays"
@@ -73,6 +73,8 @@ def main():
     ap = argparse.ArgumentParser(description="Spawn a swarm of mock DJI drones")
     ap.add_argument("--image-overlay-folder", default=DEFAULT_OVERLAY_FOLDER,
                     help=f"Folder of images; one drone is spawned per image (default: {DEFAULT_OVERLAY_FOLDER})")
+    ap.add_argument("--count", type=int, default=None,
+                    help="Total number of drones to spawn. Overrides image count and fallback.")
     ap.add_argument("--verbose", action="store_true",
                     help="Forward mock/aegis stdout+stderr to this terminal (debug drone dropouts)")
     ap.add_argument("--kill-stale", action="store_true",
@@ -87,13 +89,19 @@ def main():
 
     processes = []
 
+    # Resolve the directory of this script to ensure paths and imports work regardless of CWD
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
     # Use the venv python if available
-    python_exe = os.path.join("WebServer", "venv", "Scripts", "python.exe")
+    python_exe = os.path.join(script_dir, "WebServer", "venv", "Scripts", "python.exe")
     if not os.path.exists(python_exe):
         python_exe = "python" # Fallback
 
     # Gather overlay images — swarm size is determined by file count
     overlay_folder = cli_args.image_overlay_folder
+    if not os.path.isabs(overlay_folder):
+        overlay_folder = os.path.join(script_dir, overlay_folder)
+        
     overlay_images = []
     if os.path.isdir(overlay_folder):
         overlay_images = sorted(
@@ -102,8 +110,12 @@ def main():
             if f.lower().endswith(IMAGE_EXTS)
         )
 
-    if overlay_images:
-        count = len(overlay_images)
+    num_images = len(overlay_images)
+    if cli_args.count is not None:
+        count = cli_args.count
+        print(f"User requested {count} drones. We have {num_images} images.")
+    elif overlay_images:
+        count = num_images
         print(f"Using {count} images from '{overlay_folder}/' — spawning {count} drones.")
     else:
         count = FALLBACK_COUNT
@@ -136,67 +148,73 @@ def main():
 
     print(f"Spawning {count} mock drones around {CENTER_LAT}, {CENTER_LNG}...")
 
-    for i in range(count):
-        p_http = START_PORT + (i * 10)
-        p_tcp = p_http + 1
-        lat, lng = get_random_location(CENTER_LAT, CENTER_LNG, RADIUS_M)
-        
-        print(f"Drone {i:02}: Port {p_http}/{p_tcp} at {lat:.5f}, {lng:.5f}")
-        
-        # 1. Spawn Mock Remote
-        # We use subprocess.Popen to run in background
-        remote_cmd = [
-            python_exe, "-m", "client.mock_remote",
-            "--port-http", str(p_http),
-            "--port-tcp", str(p_tcp),
-            "--lat", str(lat),
-            "--lng", str(lng)
-        ]
-        if overlay_images:
-            remote_cmd += ["--static-image", os.path.abspath(overlay_images[i])]
-        p_remote = subprocess.Popen(
-            remote_cmd,
-            stdout=sub_stdout,
-            stderr=sub_stderr,
-            creationflags=creation_flags
-        )
-        processes.append(p_remote)
-        
-        # Give remote a moment to bind ports
-        time.sleep(0.5)
-        
-        # 2. Spawn Aegis Client
-        client_cmd = [
-            python_exe, "-m", "client.aegis_client",
-            "--ip", "127.0.0.1",
-            "--port-http", str(p_http),
-            "--port-tcp", str(p_tcp)
-        ]
-        # We don't want 30 consoles popping up, so we'll just run them hidden or in this output
-        # But wait, aegis_client has an input() prompt!
-        # I'll pipe a newline to it immediately to bypass the 'Press ENTER' prompt.
-        p_client = subprocess.Popen(
-            client_cmd,
-            stdin=subprocess.PIPE,
-            stdout=sub_stdout,
-            stderr=sub_stderr,
-            creationflags=creation_flags
-        )
-        # Pipe the ENTER key to start the mission immediately
-        try:
-            p_client.stdin.write(b"\n")
-            p_client.stdin.flush()
-        except:
-            pass
-            
-        processes.append(p_client)
-        
-        time.sleep(2.0)
-
-    print(f"\nSuccessfully spawned {len(processes)} processes ({count} remotes + {count} clients).")
-    print("Keep this script running to maintain the swarm. Press Ctrl+C to kill all drones.")
-    
     try:
+        for i in range(count):
+            p_http = START_PORT + (i * 10)
+            p_tcp = p_http + 1
+            lat, lng = get_random_location(CENTER_LAT, CENTER_LNG, RADIUS_M)
+            
+            print(f"Drone {i:02}: Port {p_http}/{p_tcp} at {lat:.5f}, {lng:.5f}")
+            
+            # 1. Spawn Mock Remote
+            # We use subprocess.Popen to run in background
+            remote_cmd = [
+                python_exe, "-m", "client.mock_remote",
+                "--port-http", str(p_http),
+                "--port-tcp", str(p_tcp),
+                "--lat", str(lat),
+                "--lng", str(lng)
+            ]
+            if i < num_images:
+                remote_cmd += ["--static-image", os.path.abspath(overlay_images[i])]
+            elif i == num_images:
+                pass # Use webcam for the first drone without an image
+            else:
+                remote_cmd += ["--black-screen"]
+            p_remote = subprocess.Popen(
+                remote_cmd,
+                stdout=sub_stdout,
+                stderr=sub_stderr,
+                creationflags=creation_flags,
+                cwd=script_dir
+            )
+            processes.append(p_remote)
+            
+            # Give remote a moment to bind ports
+            time.sleep(0.5)
+            
+            # 2. Spawn Aegis Client
+            client_cmd = [
+                python_exe, "-m", "client.aegis_client",
+                "--ip", "127.0.0.1",
+                "--port-http", str(p_http),
+                "--port-tcp", str(p_tcp)
+            ]
+            # We don't want 30 consoles popping up, so we'll just run them hidden or in this output
+            # But wait, aegis_client has an input() prompt!
+            # I'll pipe a newline to it immediately to bypass the 'Press ENTER' prompt.
+            p_client = subprocess.Popen(
+                client_cmd,
+                stdin=subprocess.PIPE,
+                stdout=sub_stdout,
+                stderr=sub_stderr,
+                creationflags=creation_flags,
+                cwd=script_dir
+            )
+            # Pipe the ENTER key to start the mission immediately
+            try:
+                p_client.stdin.write(b"\n")
+                p_client.stdin.flush()
+            except:
+                pass
+                
+            processes.append(p_client)
+            
+            time.sleep(2.0)
+    
+        print(f"\nSuccessfully spawned {len(processes)} processes ({count} remotes + {count} clients).")
+        print("Keep this script running to maintain the swarm. Press Ctrl+C to kill all drones.")
+        
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
